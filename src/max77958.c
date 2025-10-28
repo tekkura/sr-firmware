@@ -81,32 +81,85 @@ static int on_opcode_cmd_response(){
     return 0;
 }
 
-static void on_ccstat_change(){
-    rp2040_log("ccstat changed\n");
+static void on_ccstat_change(void) {
+    rp2040_log("CCStat: ccstat changed\n");
+
     memset(send_buf, 0, sizeof send_buf);
     memset(return_buf, 0, sizeof return_buf);
-    send_buf[0] = 0xC; // CC_STATUS0 
+    send_buf[0] = 0x0C; // CC_STATUS0
     i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, send_buf, 1, true);
-    i2c_read_error_handling(i2c0, MAX77958_SLAVE_P1, return_buf, 1, false);
-    uint8_t CCStat = return_buf[0] & 0b111;
+    i2c_read_error_handling(i2c0, MAX77958_SLAVE_P1, return_buf, 2, false);
+
+    uint8_t cc_status0 = return_buf[0];
+    uint8_t cc_status1 = return_buf[1];
+
+    // ----- CC_STATUS0 bitfields -----
+    uint8_t CCPinStat  = cc_status0 & 0b11000000;   // bits [7:6]
+    uint8_t CCIStat    = cc_status0 & 0b00110000;   // bits [5:4]
+    bool    CCVcnStat  = cc_status0 & 0b00001000;   // bit  [3]
+    uint8_t CCStat     = cc_status0 & 0b00000111;   // bits [2:0]
+
+    // ----- CC_STATUS1 bitfields -----
+    bool VCONN_OCP = cc_status1 & 0b00100000;  // bit [5]
+    bool VCONN_SC  = cc_status1 & 0b00010000;  // bit [4]
+    bool VSafeOV   = cc_status1 & 0b00001000;  // bit [3]
+    bool DetAbrt   = cc_status1 & 0b00000100;  // bit [2]
+    bool Wtr       = cc_status1 & 0b00000010;  // bit [1]
+
+    rp2040_log("  CCStat: CCPinStat=%s\n",
+        (CCPinStat == 0b00000000 ? "00 (none)" :
+        (CCPinStat == 0b01000000 ? "01 (CC1)" :
+        (CCPinStat == 0b10000000 ? "10 (CC2)" : "11 (reserved)"))));
+
+    rp2040_log("  CCStat: CCIStat=%s\n",
+        (CCIStat == 0b00000000 ? "00 (none)" :
+        (CCIStat == 0b00010000 ? "01 (500mA)" :
+        (CCIStat == 0b00100000 ? "10 (1.5A)" : "11 (3.0A)"))));
+
+    rp2040_log("  CCStat: CCVcnStat=%s\n", CCVcnStat ? "1 (VCONN ON)" : "0 (VCONN OFF)");
+
+    rp2040_log("  CCStat=%s\n",
+        (CCStat == 0b000 ? "000 (none)" :
+        (CCStat == 0b001 ? "001 (sink)" :
+        (CCStat == 0b010 ? "010 (source)" :
+        (CCStat == 0b011 ? "011 (audio)" :
+        (CCStat == 0b100 ? "100 (debug)" :
+        (CCStat == 0b101 ? "101 (error)" :
+        (CCStat == 0b110 ? "110 (disabled)" : "111 (debug sink)"))))))));
+
+    // ---- Original CCStat switch preserved exactly ----
     switch (CCStat){
-	case 0b000:
-	    rp2040_log("ccstat changed to no connection\n");
-	    vbus_turn_off();
-	    break;
-	case 0b001:
-	    rp2040_log("ccstat changed to SINK\n");
-	    vbus_turn_off();
-	    break;
-	case 0b010:
-	    rp2040_log("ccstat changed to SOURCE\n");
-	    //vbus_turn_on();
-	    break;
-	default: 
-	    rp2040_log("ccstat changed to %d\n", CCStat);
-	    break;
-	}
+        case 0b000:
+            rp2040_log("CCStat: ccstat changed to no connection\n");
+            vbus_turn_off();
+            break;
+        case 0b001:
+            rp2040_log("CCStat: ccstat changed to SINK\n");
+            vbus_turn_off();
+            break;
+        case 0b010:
+            rp2040_log("CCStat: ccstat changed to SOURCE\n");
+            //vbus_turn_on();
+            break;
+        default:
+            rp2040_log("CCStat: ccstat changed to %d\n", CCStat);
+            break;
+    }
+
+    // ---- Fault / condition flags ----
+    if (Wtr)
+        rp2040_log("ERROR: CCStat: Moisture detected on CC (Wtr=1)\n");
+    if (DetAbrt)
+        rp2040_log("ERROR: CCStat: Charger detection aborted (DetAbrt=1)\n");
+    if (VSafeOV)
+        rp2040_log("ERROR: CCStat: VBUS overvoltage detected (VSafeOV=1)\n");
+    if (VCONN_SC)
+        rp2040_log("ERROR: CCStat: VCONN short-circuit detected (VCONN_SC=1)\n");
+    if (VCONN_OCP)
+        rp2040_log("ERROR: CCStat: VCONN overcurrent detected (VCONN_OCP=1)\n");
 }
+
+
 
 static void on_chgtype_change(){
     rp2040_log("chgtype changed\n");
@@ -473,6 +526,7 @@ void max77958_init(uint gpio_interrupt, queue_t* cq, queue_t* rq){
 
     opcode_queue_pop();
     rp2040_log("max77958 init finished\n");
+    on_ccstat_change();
 }
 
 // check if opcode_queue has entries remaining
