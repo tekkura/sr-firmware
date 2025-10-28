@@ -75,7 +75,7 @@ void core1_entry() {
 int32_t call_queue_pop(){
     queue_entry_t entry;
     queue_remove_blocking(&call_queue, &entry);
-    rp2040_log("call_queue entry removed. call_queue has %d entries remaining to handle\n", queue_get_level(&call_queue));
+    //rp2040_log("call_queue entry removed. call_queue has %d entries remaining to handle\n", queue_get_level(&call_queue));
     int32_t result = entry.func(entry.data);
     return result;
 }
@@ -92,7 +92,7 @@ void results_queue_pop(){
         //queue_try_remove(&results_queue, &entry);
         queue_remove_blocking(&results_queue, &entry);
         // TODO implement what to do with results_queue entries.
-        rp2040_log("results_queue has %d entries remaining to handle\n", queue_get_level(&results_queue));
+        //rp2040_log("results_queue has %d entries remaining to handle\n", queue_get_level(&results_queue));
     }
 }
 

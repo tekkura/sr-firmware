@@ -270,7 +270,7 @@ static void get_interrupt_vals(){
     send_buf[0] = REG_UIC_INT; // 0x04 Register
     i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, send_buf, 1, true);
     i2c_read_error_handling(i2c0, MAX77958_SLAVE_P1, return_buf, 4, false);
-    rp2040_log("interrupts vals: 0x4: 0x%02x, 0x5: 0x%02x, 0x6: 0x%02x, 0x7: 0x%02x\n", return_buf[0], return_buf[1], return_buf[2], return_buf[3]);
+    //rp2040_log("interrupts vals: 0x4: 0x%02x, 0x5: 0x%02x, 0x6: 0x%02x, 0x7: 0x%02x\n", return_buf[0], return_buf[1], return_buf[2], return_buf[3]);
 }
 
 static void get_interrupt_masks(){
