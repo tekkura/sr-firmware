@@ -43,6 +43,7 @@ void rp2040_log_release_lock() {
 
 
 void rp2040_log(const char* format, ...) {
+    rp2040_log_acquire_lock(); // Acquire the lock
     va_list args;
 
     #ifdef LOGGER_UART
@@ -54,6 +55,7 @@ void rp2040_log(const char* format, ...) {
     
     // Send directly to UART0 on GPIO16/17
     uart_puts(LOG_UART, buffer);
+    rp2040_log_release_lock(); // Release the lock
     return;
     #endif
 
@@ -67,7 +69,6 @@ void rp2040_log(const char* format, ...) {
 	len = LOG_BUFFER_CHAR_LIMIT;
     }
 
-    rp2040_log_acquire_lock(); // Acquire the lock
 
     // Format the message and copy it to the buffer, handling wrapping
     va_start(args, format); // Restart the argument list

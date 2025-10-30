@@ -25,6 +25,15 @@
 #include "serial_comm_manager.h"
 #include "hardware/pwm.h"
 
+// Use the same UART definitions as rp2040_log.c
+#if PICO_DEFAULT_UART == 0
+#define LOG_UART uart0
+#else
+#define LOG_UART uart1
+#endif
+#define LOG_UART_TX_PIN PICO_DEFAULT_UART_TX_PIN
+#define LOG_UART_RX_PIN PICO_DEFAULT_UART_RX_PIN
+
 #if LIB_PICO_STDIO_UART
 static stdio_driver_t *driver=&stdio_uart;
 #elif LIB_PICO_STDIO_USB
@@ -184,6 +193,17 @@ int main(){
 
 void on_start(){
     rp2040_log_init();
+    
+    #ifdef LOGGER_UART
+    // Force UART reset to clear any residual buffers
+    uart_deinit(LOG_UART);
+    sleep_ms(50);
+    uart_init(LOG_UART, 115200);
+    gpio_set_function(LOG_UART_TX_PIN, GPIO_FUNC_UART);
+    gpio_set_function(LOG_UART_RX_PIN, GPIO_FUNC_UART);
+    #endif
+    
+    rp2040_log("=== FIRMWARE RESTART ===\n");
     rp2040_log("on_start\n");
     stdio_init_all();
     stdio_set_translate_crlf(driver, false);
