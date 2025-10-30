@@ -163,18 +163,7 @@ int main(){
     bool shutdown = false;
     on_start();
     sleep_ms(1000);
-    //int i = 0;
-    while (true)
-    {
-	//results_queue_pop();
-        //sample_adc_inputs();
-	//get_battery_state();
-	//max77976_get_chg_details();
-	//quad_encoder_update();
-	//sleep_ms(100);
-	//quad_encoder_update();
-	//max77976_log_current_limit();
-	//max77976_toggle_led();
+    while (true){
         get_block();
 	if (shutdown){
 	    on_shutdown();
@@ -184,7 +173,6 @@ int main(){
             sleep_ms(10);
 	    tight_loop_contents();
 	}
-//	i++;
     }
     on_shutdown();
 
@@ -193,7 +181,7 @@ int main(){
 
 void on_start(){
     rp2040_log_init();
-    
+
     #ifdef LOGGER_UART
     // Force UART reset to clear any residual buffers
     uart_deinit(LOG_UART);
@@ -202,7 +190,7 @@ void on_start(){
     gpio_set_function(LOG_UART_TX_PIN, GPIO_FUNC_UART);
     gpio_set_function(LOG_UART_RX_PIN, GPIO_FUNC_UART);
     #endif
-    
+
     rp2040_log("=== FIRMWARE RESTART ===\n");
     rp2040_log("on_start\n");
     stdio_init_all();
