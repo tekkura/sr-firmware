@@ -388,7 +388,7 @@ void test_max77958_cc_ctrl1_read(){
     //    assert(false);
     //}
 
-    rp2040_log("test_max77958_bc_ctrl1_read PASSED: BC_CTRL1_CONFIG = %x\n", op_code_return_buf[1]); 
+    rp2040_log("test_max77958_cc_ctrl1_read PASSED: CC_CTRL1_CONFIG = %x\n", op_code_return_buf[1]); 
 }
 
 void test_max77958_bc_ctrl1_read(){
@@ -527,6 +527,7 @@ void max77958_init(uint gpio_interrupt, queue_t* cq, queue_t* rq){
     opcode_queue_pop();
     rp2040_log("max77958 init finished\n");
     on_ccstat_change();
+
 }
 
 // check if opcode_queue has entries remaining
