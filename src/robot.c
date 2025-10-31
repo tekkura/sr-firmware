@@ -250,9 +250,16 @@ void on_start(){
 void robot_unit_tests(){
     rp2040_log("----------Running robot unit tests-----------\n");
     test_max77958_get_id();
-    test_max77958_get_customer_config_id();
-    test_max77958_cc_ctrl1_read();
+    test_max77958_status_block_read_all();
     test_max77958_bc_ctrl1_read();
+    test_max77958_bc_ctrl2_read();
+    test_max77958_control1_read();
+    test_max77958_cc_ctrl1_read();
+    test_max77958_cc_ctrl4_read();
+    test_max77958_gpio_control_read();
+    test_max77958_gpio0_gpio1_adc_read();
+    test_max77958_snk_pdo_request();
+    test_max77958_get_customer_config();
     test_max77958_interrupt();
     test_max77976_get_id();
     test_max77976_get_FSW();
