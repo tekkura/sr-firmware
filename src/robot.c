@@ -115,10 +115,12 @@ void get_state(RP2040_STATE* state){
 
     // MotorDetails: DRV8830DRCR Data: Includes MOTOR_FAULT, ENCODER_COUNTS, MOTOR_LEVELS, MOTOR_BRAKE
     //TODO this should not update response with static int values like this
+    #ifndef BOARD_PICO
     get_encoder_counts(state);
     get_motor_faults(state);
     get_charger_state(state);
     get_battery_state(state);
+    #endif
 }
 
 // Takes the response and add the quad encoder counts to it
@@ -155,8 +157,10 @@ void get_charger_state(RP2040_STATE* state){
 }
 
 void set_motor_levels(RP2040_STATE* state){
+    #ifndef BOARD_PICO
     set_motor_control(MOTOR_LEFT, state->MotorsState.ControlValues.left);
     set_motor_control(MOTOR_RIGHT, state->MotorsState.ControlValues.right);
+    #endif
 }
 
 int main(){
@@ -199,6 +203,8 @@ void on_start(){
     irq_set_enabled(IO_IRQ_BANK0, true);
     init_queues();
     multicore_launch_core1(core1_entry);
+
+    #ifndef BOARD_PICO
     i2c_start();
     adc_init();
     turn_on_leds();
@@ -208,19 +214,31 @@ void on_start(){
     sn74ahc125rgyr_init(SN74AHC125RGYR_GPIO1);
     sn74ahc125rgyr_init(SN74AHC125RGYR_GPIO2);
     max77958_init(MAX77958_INTB, &call_queue, &results_queue);
+    #endif
+
     sleep_ms(1000);
     rp2040_log("done waiting 2\n");
+
+    #ifndef BOARD_PICO
     bq27742_g1_init();
     bq27742_g1_fw_version_check();
     // Be sure to do this last
     sn74ahc125rgyr_on_end_of_start(SN74AHC125RGYR_GPIO1);
     sn74ahc125rgyr_on_end_of_start(SN74AHC125RGYR_GPIO2);
     drv8830_init(DRV8830_FAULT1, DRV8830_FAULT2);
+    #endif
+
     sleep_ms(1000);
+    
+    #ifndef BOARD_PICO
     encoder_init(&call_queue);
+    #endif
+    
     rp2040_log("encoders initialize. Waiting 1 second\n");
     sleep_ms(1000);
     rp2040_log("done waiting, Running unit tests.\n");
+
+    #ifndef BOARD_PICO
     set_voltage(MOTOR_LEFT, 2.5);
     set_voltage(MOTOR_RIGHT, 2.5);
     int i = 0;
@@ -233,13 +251,19 @@ void on_start(){
     set_voltage(MOTOR_LEFT, 0);
     set_voltage(MOTOR_RIGHT, 0);
     robot_unit_tests();
+    #endif
+
     serial_comm_manager_init(&rp2040_state);
+
+    #ifndef BOARD_PICO
     i2c_scan(i2c0);
     i2c_scan(i2c1);
     //STWLC38_get_ept_reasons(); // Note I am only adding this here so I can access it from gdb later
     read_reg(0x9);
     read_reg(0xA);
     read_reg(0xD);
+    #endif
+
     rp2040_log("on_start complete\n");
     //while(!stdio_usb_connected()){
     //    sleep_ms(100);
@@ -272,18 +296,21 @@ void robot_unit_tests(){
 
 void on_shutdown(){
     rp2040_log("Shutting down\n");
+
+    #ifndef BOARD_PICO
     max77958_shutdown(MAX77958_INTB);
     //sn74ahc125rgyr_shutdown(SN74AHC125RGYR_GPIO);
     //max77976_shutdown();
     //ncp3901_shutdown();
     //wrm483265_10f5_12v_g_shutdown(WIRELESS_CHG_EN);
     adc_shutdown();
+    bq27742_g1_shutdown();
     // Note this will shut off the battery to the rp2040 so unless you're plugged in, everything will fail here.
     // TODO how do I wake from this if the rp2040 has no power to respond??
+    #endif
 
     signal_stop_core1();
     free_queues();
-    bq27742_g1_shutdown();
     //i2c_stop();
 }
 
