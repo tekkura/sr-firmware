@@ -63,7 +63,8 @@ help:
 	@echo "  make clean       - Remove build artifacts"
 	@echo "  make docker      - Build or rebuild the Docker image (must be in project root)"
 	@echo "  make shell       - Start an interactive shell in the Docker container"
-	@echo "  make test TEST=rtt BOARD=[pico|customPCB] [SKIP_FLASH=1] - Run Host Benchmark"
+	@echo "  make benchmark   - Build and run host benchmark (in Docker)"
+	@echo "  make test TEST=rtt BOARD=[pico|customPCB] - Run full RTT benchmark flow"
 	@echo ""
 	@echo "Assumptions:"
 	@echo "  - All commands must be run from the project root directory (where this Makefile is located)."
@@ -164,6 +165,14 @@ shell:
 	@echo "Starting interactive shell in Docker..."
 	$(DOCKER_RUN) bash
 
+# Build and run host benchmark
+.PHONY: benchmark
+benchmark:
+	@echo "Building host benchmark in Docker..."
+	$(DOCKER_TEST_RUN) bash -c "cmake -S tools/benchmark -B tools/benchmark/build && cmake --build tools/benchmark/build -j$(JOBS)"
+	@echo "Running host benchmark in Docker..."
+	$(DOCKER_TEST_RUN) bash -c "./tools/benchmark/build/benchmark"
+
 # Test Target (Benchmark)
 .PHONY: test
 test:
@@ -177,14 +186,10 @@ ifeq ($(TEST),rtt)
 	$(MAKE) firmware BOARD=$(BOARD)
 	
 	@echo "[2/3] Flashing Firmware..."
-ifneq ($(SKIP_FLASH),1)
 	$(MAKE) flash
-else
-	@echo "SKIP_FLASH=1 defined. Skipping explicit flash step..."
-endif
 
 	@echo "[3/3] Running Host Benchmark..."
-	$(DOCKER_TEST_RUN) bash -c "g++ -O2 -std=c++17 tools/benchmark/main.cpp -o tools/benchmark/benchmark && ./tools/benchmark/benchmark"
+	$(MAKE) benchmark
 else
-	@echo "Usage: make test TEST=rtt BOARD=[pico|customPCB] [SKIP_FLASH=1]"
+	@echo "Usage: make test TEST=rtt BOARD=[pico|customPCB]"
 endif

@@ -29,13 +29,6 @@ make test TEST=rtt BOARD=pico
 
 ```
 
-*Note: If you do not have a hardware debug probe (CMSIS-DAP) connected, the automated OpenOCD flash step will fail to prevent benchmarking stale firmware. In this case, you must manually flash the generated `build/robot.uf2` to the Pico in BOOTSEL mode, and append `SKIP_FLASH=1` to bypass the hardware flasher:*
-
-```bash
-make test TEST=rtt BOARD=pico SKIP_FLASH=1
-
-```
-
 ### Option B: Testing on the Custom PCB (Production)
 
 To run the benchmark on the actual robot hardware with all sensors, battery ICs, and motor drivers enabled, use:
@@ -51,10 +44,10 @@ make test TEST=rtt BOARD=customPCB
 
 ### Developer Tip: Fast Iteration (Run Benchmark Only)
 
-If you have already flashed the firmware and only want to modify or re-run the C++ host benchmark tool without rebuilding the firmware, you can bypass the `make` pipeline and run the benchmark directly inside the Docker environment:
+If you have already flashed the firmware and only want to modify or re-run the C++ host benchmark tool without rebuilding the firmware, run:
 
 ```bash
-docker run --rm -it --device /dev/ttyACM0:/dev/ttyACM0 -v $(pwd):/project -w /project topher217/smartphone-robot-firmware:latest bash -c "g++ -O2 -std=c++17 tools/benchmark/main.cpp -o tools/benchmark/benchmark && ./tools/benchmark/benchmark"
+make benchmark
 
 ```
 
