@@ -30,7 +30,6 @@ else
   DOCKER_IMAGE_TAG := $(DOCKER_IMAGE):$(DOCKER_TAG)-$(ARCH)
 endif
 
-# Original Global DOCKER_RUN
 DOCKER_RUN := docker run --rm -it \
     --device /dev/bus/usb:/dev/bus/usb \
     -v $(shell pwd):/project \
