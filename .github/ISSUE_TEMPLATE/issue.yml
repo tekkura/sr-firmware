@@ -1,0 +1,31 @@
+name: Issue
+description: Report an issue using the standard minimal format
+title: "[Issue]: "
+labels: []
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Briefly describe the issue or proposed change.
+      placeholder: What is this issue about?
+    validations:
+      required: true
+
+  - type: textarea
+    id: current_behavior
+    attributes:
+      label: Current state
+      description: Describe the current state or baseline.
+      placeholder: What is the current state?
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected_behavior
+    attributes:
+      label: Expected state
+      description: Describe the desired state after this issue is addressed.
+      placeholder: What should the state be?
+    validations:
+      required: true

@@ -1,0 +1,180 @@
+name: Audit Log Reconcile Staging
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 2 * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: audit-log-reconcile-staging
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify audit push token is configured
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${{ secrets.AUDIT_LOG_PUSH_TOKEN }}" ]; then
+            echo "AUDIT_LOG_PUSH_TOKEN is not configured."
+            exit 1
+          fi
+
+      - name: Checkout audit-log branch
+        uses: actions/checkout@v4
+        with:
+          ref: audit-log
+          fetch-depth: 0
+          token: ${{ secrets.AUDIT_LOG_PUSH_TOKEN }}
+
+      - name: Reconcile staging branches into audit-log
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p audit audit/events
+          touch audit/events.ndjson
+
+          mapfile -t staging_branches < <(
+            git ls-remote --heads origin 'refs/heads/audit-staging/*' \
+              | awk '{sub("refs/heads/", "", $2); print $2}' \
+              | sort
+          )
+
+          : > /tmp/staging_records.ndjson
+          : > /tmp/staging_branch_list.txt
+
+          if [ "${#staging_branches[@]}" -eq 0 ]; then
+            echo "No audit-staging branches found; proceeding with canonical daily re-sort/rebuild"
+          else
+            for branch in "${staging_branches[@]}"; do
+              echo "Processing $branch"
+              echo "$branch" >> /tmp/staging_branch_list.txt
+
+              git fetch origin "$branch:$branch"
+
+              if git show "$branch:audit/events.ndjson" >/tmp/branch_events.ndjson 2>/dev/null; then
+                cat /tmp/branch_events.ndjson >> /tmp/staging_records.ndjson
+              fi
+
+              tmp_extract=$(mktemp -d)
+              if git archive "$branch" audit/events 2>/dev/null | tar -x -C "$tmp_extract" 2>/dev/null; then
+                mkdir -p audit/events
+                rsync -a --ignore-existing "$tmp_extract/audit/events/" "audit/events/" || true
+              fi
+              rm -rf "$tmp_extract"
+            done
+          fi
+
+          cat audit/events.ndjson /tmp/staging_records.ndjson | jq -cs '
+            unique_by(.event_id // (.|tostring))
+            | sort_by((.event_ts // .timestamp // ""), (.run_id // ""), (.run_attempt // ""), (.event_id // ""))[]
+          ' > /tmp/events_merged.ndjson
+          mv /tmp/events_merged.ndjson audit/events.ndjson
+
+          {
+            echo "# Last 100 Audit Events"
+            echo
+            echo "This file is generated from \`audit/events.ndjson\`."
+            echo
+            echo "| Timestamp (UTC) | Severity | Event ID | Actor | Event | Issue | Milestone | Link |"
+            echo "|---|---|---|---|---|---|---|---|"
+            tail -n 100 audit/events.ndjson | jq -r '
+              def event_file:
+                if (.event_id != null and .timestamp != null) then
+                  "events/" + (.timestamp[0:10]) + "/" + .event_id + ".md"
+                else "-"
+                end;
+
+              def event_id_cell:
+                if .event_id == null then "-"
+                else "[" + .event_id[0:12] + "...]" + "(" + event_file + ")"
+                end;
+
+              def issue_text:
+                if .issue == null then "-"
+                else "[#\(.issue.number)](\(.issue.html_url // "#"))"
+                end;
+
+              def milestone_text:
+                if .milestone != null then
+                  "[#\(.milestone.number)](\(.milestone.html_url // "#"))"
+                elif (.issue != null and .issue.milestone != null) then
+                  "[#\(.issue.milestone.number)](https://github.com/\(.repo)/milestone/\(.issue.milestone.number))"
+                else "-"
+                end;
+
+              [
+                (.timestamp // "-"),
+                (.severity // "INFO"),
+                event_id_cell,
+                (.actor // "-"),
+                (((.event_name // "-") + "." + (.action // "-"))),
+                issue_text,
+                milestone_text,
+                (.target_url // "-")
+              ]
+              | @tsv
+            ' | while IFS=$'\t' read -r ts severity event_id actor ev issue ms url; do
+              safe_issue=$(printf '%s' "$issue" | tr '\n\r' ' ')
+              safe_ms=$(printf '%s' "$ms" | tr '\n\r' ' ')
+              safe_ev=$(printf '%s' "$ev" | tr '\n\r' ' ')
+              safe_sev=$(printf '%s' "$severity" | tr '\n\r' ' ')
+              safe_event_id=$(printf '%s' "$event_id" | tr '\n\r' ' ')
+              safe_actor=$(printf '%s' "$actor" | tr '\n\r' ' ')
+
+              if [ "$url" = "-" ]; then
+                link_cell='-'
+              else
+                link_cell="[link]($url)"
+              fi
+
+              printf '| %s | %s | %s | %s | %s | %s | %s | %s |\n' "$ts" "$safe_sev" "$safe_event_id" "$safe_actor" "$safe_ev" "$safe_issue" "$safe_ms" "$link_cell"
+            done
+          } > audit/LAST_100.md
+
+          if [ -z "$(git status --porcelain -- audit/events.ndjson audit/LAST_100.md audit/events)" ]; then
+            echo "No reconciled changes to commit"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add audit/events.ndjson audit/LAST_100.md audit/events
+          git commit -m "chore(audit): reconcile staging branches"
+
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            echo "Push attempt $attempt"
+            git fetch origin audit-log
+            if ! git rebase origin/audit-log; then
+              echo "Rebase conflict on attempt $attempt; aborting rebase and retrying"
+              git rebase --abort || true
+              sleep $((attempt * 2 + RANDOM % 4))
+              continue
+            fi
+
+            if git push origin HEAD:audit-log; then
+              echo "Push succeeded"
+              break
+            fi
+
+            if [ "$attempt" -eq 10 ]; then
+              echo "Failed to push reconciled audit changes"
+              exit 1
+            fi
+
+            echo "Push failed; retrying after short delay"
+            sleep $((attempt * 2 + RANDOM % 4))
+          done
+
+          while IFS= read -r branch; do
+            [ -z "$branch" ] && continue
+            echo "Deleting reconciled staging branch: $branch"
+            git push origin --delete "$branch" || true
+          done < /tmp/staging_branch_list.txt
