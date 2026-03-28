@@ -9,3 +9,7 @@
 [submodule "include/unity"]
 	path = include/unity
 	url = https://github.com/ThrowTheSwitch/Unity.git
+
+[submodule "include/TinyFrame"]
+	path = include/TinyFrame
+	url = https://github.com/MightyPork/TinyFrame.git

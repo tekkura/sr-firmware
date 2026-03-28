@@ -66,6 +66,7 @@ message(STATUS "SOURCES: ${SOURCES}")
 add_executable(robot
     ${SOURCES}
     ${CMAKE_CURRENT_LIST_DIR}/include/CException/lib/CException.c
+    ${CMAKE_CURRENT_LIST_DIR}/include/TinyFrame/TinyFrame.c
 )
 
 pico_generate_pio_header(robot ${CMAKE_CURRENT_LIST_DIR}/src/quadrature_encoder.pio)
@@ -115,6 +116,7 @@ target_include_directories(robot PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/..
     ${CMAKE_CURRENT_LIST_DIR}/include/CException/lib
     ${CMAKE_CURRENT_LIST_DIR}/include/max77958_rp2040
+    ${CMAKE_CURRENT_LIST_DIR}/include/TinyFrame
 )
 
 # Add additional libraries
