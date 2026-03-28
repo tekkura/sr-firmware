@@ -5,17 +5,46 @@ JOBS ?= $(shell nproc)
 DOCKER_DEBUG_CONTAINER := smartphone-robot-debug
 ARCH ?= amd64
 LOGGER ?= USB
+
+#  MILESTONE 1: BOARD SELECTION & VALIDATION 
+BOARD ?= customPCB
+
+ifneq ($(BOARD),pico)
+ifneq ($(BOARD),customPCB)
+$(error Invalid BOARD value: $(BOARD). Must be 'pico' or 'customPCB')
+endif
+endif
+
+ifeq ($(BOARD),pico)
+    BOARD_FLAGS = -DBUILD_FOR_PICO=ON
+else
+    BOARD_FLAGS = 
+endif
+
+# Variable for the RTT Test to access the serial port
+DOCKER_USB_DEVICE ?= /dev/ttyACM0
+
 ifeq ($(ARCH),amd64)
   DOCKER_IMAGE_TAG := $(DOCKER_IMAGE):$(DOCKER_TAG)
 else
   DOCKER_IMAGE_TAG := $(DOCKER_IMAGE):$(DOCKER_TAG)-$(ARCH)
 endif
+
 DOCKER_RUN := docker run --rm -it \
     --device /dev/bus/usb:/dev/bus/usb \
     -v $(shell pwd):/project \
     -w /project \
     $(DOCKER_IMAGE_TAG)
+
 DOCKER_EXEC := docker exec -it $(DOCKER_DEBUG_CONTAINER)
+
+# Scoped DOCKER_RUN specifically for the RTT Test (needs serial device mapping)
+DOCKER_TEST_RUN := docker run --rm -it \
+    --device $(DOCKER_USB_DEVICE):$(DOCKER_USB_DEVICE) \
+    --device /dev/bus/usb:/dev/bus/usb \
+    -v $(shell pwd):/project \
+    -w /project \
+    $(DOCKER_IMAGE_TAG)
 
 # Default target
 .PHONY: all
@@ -33,6 +62,8 @@ help:
 	@echo "  make clean       - Remove build artifacts"
 	@echo "  make docker      - Build or rebuild the Docker image (must be in project root)"
 	@echo "  make shell       - Start an interactive shell in the Docker container"
+	@echo "  make benchmark   - Build and run host benchmark (in Docker)"
+	@echo "  make test TEST=rtt BOARD=[pico|customPCB] - Run full RTT benchmark flow"
 	@echo ""
 	@echo "Assumptions:"
 	@echo "  - All commands must be run from the project root directory (where this Makefile is located)."
@@ -49,7 +80,7 @@ help:
 .PHONY: firmware
 firmware:
 	@echo "Building firmware in Docker with $(JOBS) jobs..."
-	$(DOCKER_RUN) bash -c "rm -rf build && mkdir build && cd build && cmake .. -DLOGGER=$(LOGGER) && make -j$(JOBS)"
+	$(DOCKER_RUN) bash -c "rm -rf build && mkdir build && cd build && cmake .. -DLOGGER=$(LOGGER) $(BOARD_FLAGS) && make -j$(JOBS)"
 
 # Name for the persistent debug container
 DEBUG_CONTAINER := smartphone-robot-debug
@@ -132,3 +163,32 @@ docker-push:
 shell:
 	@echo "Starting interactive shell in Docker..."
 	$(DOCKER_RUN) bash
+
+# Build and run host benchmark
+.PHONY: benchmark
+benchmark:
+	@echo "Building host benchmark in Docker..."
+	$(DOCKER_TEST_RUN) bash -c "cmake -S tools/benchmark -B tools/benchmark/build && cmake --build tools/benchmark/build -j$(JOBS)"
+	@echo "Running host benchmark in Docker..."
+	$(DOCKER_TEST_RUN) bash -c "./tools/benchmark/build/benchmark"
+
+# Test Target (Benchmark)
+.PHONY: test
+test:
+ifeq ($(TEST),rtt)
+	@echo "========================================"
+	@echo "   RUNNING RTT BENCHMARK TEST"
+	@echo "   Target Board: $(BOARD)"
+	@echo "========================================"
+	
+	@echo "[1/3] Building Firmware..."
+	$(MAKE) firmware BOARD=$(BOARD)
+	
+	@echo "[2/3] Flashing Firmware..."
+	$(MAKE) flash
+
+	@echo "[3/3] Running Host Benchmark..."
+	$(MAKE) benchmark
+else
+	@echo "Usage: make test TEST=rtt BOARD=[pico|customPCB]"
+endif
