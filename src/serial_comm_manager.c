@@ -5,160 +5,185 @@
 #include <stdio.h>
 #include "robot.h"
 #include "rp2040_log.h"
+#include "TinyFrame.h"
 
-static IncomingPacketFromAndroid incoming_packet_from_android;
-static OutgoingPacketToAndroid outgoing_packet_to_android;
-static OutgoingLogPacketToAndroid outgoing_log_packet_to_android;
-void handle_packet(IncomingPacketFromAndroid *packet);
+static TinyFrame tf;
 static RP2040_STATE rp2040_state_;
+
+/**
+ * TinyFrame Write Implementation
+ * Sends data to the Android host via stdio (USB/UART)
+ */
+void TF_WriteImpl(TinyFrame *tf, const uint8_t *buff, uint32_t len) {
+    for (uint32_t i = 0; i < len; i++) {
+        putchar(buff[i]);
+    }
+}
+
+// Helper for streaming logs through TinyFrame multipart
+static void tf_log_stream_cb(void* ctx, const uint8_t* buff, uint32_t len) {
+    TF_Multipart_Payload((TinyFrame*)ctx, buff, len);
+}
+
+// Helper for sending a NACK response
+static void send_nack(TinyFrame *tf, TF_ID id) {
+    TF_Msg response;
+    TF_ClearMsg(&response);
+    response.type = NACK;
+    response.frame_id = id;
+    response.is_response = true;
+    TF_Respond(tf, &response);
+}
+
+// Forward declarations for TinyFrame listeners
+TF_Result listener_get_log(TinyFrame *tf, TF_Msg *msg);
+TF_Result listener_set_motor_level(TinyFrame *tf, TF_Msg *msg);
+TF_Result listener_get_state(TinyFrame *tf, TF_Msg *msg);
+TF_Result listener_reset_state(TinyFrame *tf, TF_Msg *msg);
+TF_Result generic_listener(TinyFrame *tf, TF_Msg *msg);
 
 void serial_comm_manager_init(RP2040_STATE* rp2040_state){
     rp2040_state_ = *rp2040_state;
-    incoming_packet_from_android.start_marker = START_MARKER;
-    incoming_packet_from_android.end_marker = END_MARKER;
-    outgoing_packet_to_android.start_marker = START_MARKER;
-    outgoing_packet_to_android.end_marker = END_MARKER;
-    outgoing_packet_to_android.data_size = sizeof(rp2040_state_);
-    outgoing_log_packet_to_android.start_marker = START_MARKER;
-    outgoing_log_packet_to_android.packet_type = GET_LOG;
-    outgoing_log_packet_to_android.end_marker = END_MARKER;
+
+    // Initialize TinyFrame as a Slave (Pico side)
+    TF_InitStatic(&tf, TF_SLAVE);
+
+    // Register Type Listeners for the protocol commands
+    TF_AddTypeListener(&tf, GET_LOG, listener_get_log);
+    TF_AddTypeListener(&tf, SET_MOTOR_LEVEL, listener_set_motor_level);
+    TF_AddTypeListener(&tf, GET_STATE, listener_get_state);
+    TF_AddTypeListener(&tf, RESET_STATE, listener_reset_state);
+
+    // Register a Generic Listener to catch unknown commands and send NACK
+    TF_AddGenericListener(&tf, generic_listener);
 }
 
-static void reset_packet_and_send_nack(int8_t *start_idx, int8_t *end_idx, uint16_t *buffer_index) {
-    *start_idx = -1;
-    *end_idx = -1;
-    *buffer_index = 0;
-    memset(&incoming_packet_from_android, 0, sizeof(IncomingPacketFromAndroid));
-    outgoing_packet_to_android.packet_type = NACK;
-    uint8_t* nack_bytes = (uint8_t*)&outgoing_packet_to_android;
-    for (int j = 0; j < sizeof(outgoing_packet_to_android); j++){
-        putchar(nack_bytes[j]);
-    }
-}
-
-// reads data from the UART and stores it in buffer. If no data is available, returns immediately.
-// if new data is available, reads it until the buffer is full or both start and stop markers detected
-// calls handle_block to process the data if both markers are detected
+/**
+ * Refactored get_block: Feeds characters to TinyFrame
+ * This replaces the manual state machine with TinyFrame's parser.
+ */
 void get_block() {
-    // initialize as -1 as a way of detecting the absence of each marker in the buffer
-    static int8_t start_idx = -1;
-    static int8_t end_idx = -1;
-    uint16_t buffer_index= 0;
-    uint8_t i = 0;
-    uint8_t MAX_SERIAL_GET_COUNT = 100;
+    int c;
     
-    int c = getchar_timeout_us(100);
-    // Only process data after finding the START_MARKER
-    if (c != PICO_ERROR_TIMEOUT && c == START_MARKER){
-        start_idx = buffer_index;
-	// After finding the start marker get the rest of the packet or until MAX_SERIAL_GET_COUNT
-	// to prevent an infinite loop
-	// + 1 to accomodate for the packet_type
-        while (buffer_index < (ANDROID_BUFFER_LENGTH_IN + 1) || i == MAX_SERIAL_GET_COUNT) {
-            c = getchar_timeout_us(100);
-    
-    	    if (c != PICO_ERROR_TIMEOUT){
-    	        if (buffer_index == 0){
-    	    	    // First byte after start marker is the command
-    	    	    incoming_packet_from_android.packet_type = (c & 0xFF);
-    	    	    buffer_index++;
-    	        }else{
-		    // -2 to accomodate for the start marker and packet_type
-    	    	    incoming_packet_from_android.data[buffer_index - 1] = (c & 0xFF);
-    	    	    buffer_index++;
-    	        }
-    	    }else {
-    	        rp2040_log("Timeout while reading packet. Resetting state.\n");
-                reset_packet_and_send_nack(&start_idx, &end_idx, &buffer_index);
-                return;
-	    }
-    	    i++;
-        }
-	c = getchar_timeout_us(100);
-        if (c != PICO_ERROR_TIMEOUT && c == END_MARKER){
-            // Calculate the length of the packet
-            uint16_t packet_length = end_idx - start_idx;
-            if (packet_length >= sizeof(IncomingPacketFromAndroid)) {
-                // Call the handle_block function with the packet data
-                handle_packet(&incoming_packet_from_android);
-                // Reset the values of start and end idx to detect the next block
-                start_idx = -1;
-                end_idx = -1;
-                buffer_index = 0;
-                // Reset the packet
-                memset(&incoming_packet_from_android, 0, sizeof(IncomingPacketFromAndroid)); } else {
-                rp2040_log("Received incomplete packet. Resetting state.\n");
-                reset_packet_and_send_nack(&start_idx, &end_idx, &buffer_index);
-                return;
-            }
-        }else{
-            rp2040_log("Received packet with no end marker. Resetting state.\n");
-            reset_packet_and_send_nack(&start_idx, &end_idx, &buffer_index);
-            return;
-        }
+    // Provide a timebase for TinyFrame timeouts
+    static uint32_t last_tick = 0;
+    uint32_t now = to_ms_since_boot(get_absolute_time());
+    if (now != last_tick) {
+        TF_Tick(&tf);
+        last_tick = now;
+    }
 
+    // Read all available characters from the serial buffer and feed them to the TF state machine
+    while ((c = getchar_timeout_us(0)) != PICO_ERROR_TIMEOUT) {
+        TF_AcceptChar(&tf, (uint8_t)c);
     }
 }
 
-void handle_packet(IncomingPacketFromAndroid *packet){
-    uint8_t* bytes;
-    // Assign the same packet type to the outgoing packet for verification on Android end
-    switch (packet->packet_type){
-    	case GET_LOG:
-	    outgoing_log_packet_to_android.packet_type = packet->packet_type;
+// --- TinyFrame Listeners Implementation ---
 
-	    putchar(outgoing_log_packet_to_android.start_marker);
-	    putchar(outgoing_log_packet_to_android.packet_type);
+/**
+ * Unhandled message listener: sends NACK
+ */
+TF_Result generic_listener(TinyFrame *tf, TF_Msg *msg) {
+    send_nack(tf, msg->frame_id);
+    return TF_STAY;
+}
 
-	    rp2040_log_acquire_lock();
-	    outgoing_log_packet_to_android.data_size = rp2040_get_byte_count();
+/**
+ * Sends back the circular buffer logs as a multipart message
+ */
+TF_Result listener_get_log(TinyFrame *tf, TF_Msg *msg) {
+    TF_Msg response;
+    TF_ClearMsg(&response);
+    response.type = msg->type;
+    response.frame_id = msg->frame_id;
+    response.is_response = true;
 
-	    // put uint16_t data_size via putchar
-	    putchar(outgoing_log_packet_to_android.data_size & 0xFF);
-	    putchar((outgoing_log_packet_to_android.data_size >> 8) & 0xFF);
+    rp2040_log_acquire_lock();
+    uint16_t log_size = rp2040_get_byte_count();
+    response.len = log_size;
+    response.data = NULL; // will use multipart
 
-	    rp2040_log_flush();
-	    rp2040_log_release_lock();
+    TF_Respond_Multipart(tf, &response);
+    rp2040_log_flush_cb(tf_log_stream_cb, tf);
+    TF_Multipart_Close(tf);
+    rp2040_log_release_lock();
 
-	    putchar(outgoing_log_packet_to_android.end_marker);
-	    break;
-	case SET_MOTOR_LEVEL:
-            outgoing_packet_to_android.packet_type = packet->packet_type;
-	    // Clear the state
-            memset(&rp2040_state_, 0, sizeof(rp2040_state_));
-	    // Copy the motor levels from the packet to the rp2040_state_
-            memcpy(&rp2040_state_.MotorsState.ControlValues.left, &packet->data[0], sizeof(uint8_t));
-	    memcpy(&rp2040_state_.MotorsState.ControlValues.right, &packet->data[1], sizeof(uint8_t));
-	    set_motor_levels(&rp2040_state_);
-            // Add STATE to response
-            get_state(&rp2040_state_);
-	    outgoing_packet_to_android.data = rp2040_state_;
+    return TF_STAY;
+}
 
-	    // Print the outgoing packet chars
-            bytes = (uint8_t*)&outgoing_packet_to_android;
-            for (int i = 0; i < sizeof(outgoing_packet_to_android); i++){
-                putchar(bytes[i]);
-            }
-	    break;
-	case GET_STATE:
-            outgoing_packet_to_android.packet_type = packet->packet_type;
-	    // Clear the state
-            memset(&rp2040_state_, 0, sizeof(rp2040_state_));
-            // Add STATE to response
-            get_state(&rp2040_state_);
-	    outgoing_packet_to_android.data = rp2040_state_;
-
-	    // Print the outgoing packet chars
-            bytes = (uint8_t*)&outgoing_packet_to_android;
-            for (int i = 0; i < sizeof(outgoing_packet_to_android); i++){
-                putchar(bytes[i]);
-            }
-	    break;
-	case RESET_STATE:
-		// TODO
-		break;
-	default:
-		outgoing_packet_to_android.packet_type = NACK;
-		break;
+/**
+ * Sets motor levels and responds with the updated robot state
+ */
+TF_Result listener_set_motor_level(TinyFrame *tf, TF_Msg *msg) {
+    if (msg->len >= 2) {
+        // Clear the local state cache
+        memset(&rp2040_state_, 0, sizeof(rp2040_state_));
+        
+        // Copy the motor levels from the received payload
+        rp2040_state_.MotorsState.ControlValues.left = msg->data[0];
+        rp2040_state_.MotorsState.ControlValues.right = msg->data[1];
+        
+        // Apply to hardware
+        set_motor_levels(&rp2040_state_);
+        
+        // Refresh full state for response
+        get_state(&rp2040_state_);
+        
+        TF_Msg response;
+        TF_ClearMsg(&response);
+        response.type = msg->type;
+        response.frame_id = msg->frame_id;
+        response.is_response = true;
+        response.data = (uint8_t*)&rp2040_state_;
+        response.len = sizeof(rp2040_state_);
+        
+        TF_Respond(tf, &response);
+    } else {
+        // Explicitly send NACK if the command data is invalid (wrong length)
+        send_nack(tf, msg->frame_id);
     }
+    return TF_STAY;
+}
+
+/**
+ * Responds with the current full robot state
+ */
+TF_Result listener_get_state(TinyFrame *tf, TF_Msg *msg) {
+    // Refresh full state
+    memset(&rp2040_state_, 0, sizeof(rp2040_state_));
+    get_state(&rp2040_state_);
+    
+    TF_Msg response;
+    TF_ClearMsg(&response);
+    response.type = msg->type;
+    response.frame_id = msg->frame_id;
+    response.is_response = true;
+    response.data = (uint8_t*)&rp2040_state_;
+    response.len = sizeof(rp2040_state_);
+    
+    TF_Respond(tf, &response);
+    return TF_STAY;
+}
+
+/**
+ * Reset robot state placeholder implementation
+ */
+TF_Result listener_reset_state(TinyFrame *tf, TF_Msg *msg) {
+    // Perform hardware reset logic here
+    // For now, we respond with ACK or current state
+    
+    TF_Msg response;
+    TF_ClearMsg(&response);
+    response.type = msg->type;
+    response.frame_id = msg->frame_id;
+    response.is_response = true;
+    
+    // We could send back an empty ACK packet or current state
+    get_state(&rp2040_state_);
+    response.data = (uint8_t*)&rp2040_state_;
+    response.len = sizeof(rp2040_state_);
+    
+    TF_Respond(tf, &response);
+    return TF_STAY;
 }

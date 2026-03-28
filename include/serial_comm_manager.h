@@ -5,18 +5,15 @@
 #include "pico/types.h"
 #include "rp2040_log.h"
 
+// TinyFrame Type IDs (Commands)
 #define GET_LOG 0x00
 #define SET_MOTOR_LEVEL 0x01
 #define RESET_STATE 0x02
 #define GET_STATE 0x03
 
+// Status codes
 #define NACK 0xFC
 #define ACK 0xFD
-#define START_MARKER 0xFE
-#define END_MARKER 0xFF
-
-#define ANDROID_BUFFER_LENGTH_IN _u(2)
-#define ANDROID_BUFFER_LENGTH_OUT _u(61) // +3 for start, command, and end marks for a 64 byte packet
 
 #pragma pack(1) // Set packing alignment to 1 byte
 typedef struct
@@ -62,32 +59,6 @@ typedef struct
 
 
 } RP2040_STATE;
-
-typedef struct
-{
-    uint8_t start_marker;
-    uint8_t packet_type;
-    uint8_t data[ANDROID_BUFFER_LENGTH_IN];
-    uint8_t end_marker;
-} IncomingPacketFromAndroid;
-
-typedef struct
-{
-    uint8_t start_marker;
-    uint8_t packet_type;
-    uint16_t data_size;
-    RP2040_STATE data;
-    uint8_t end_marker;
-} OutgoingPacketToAndroid;
-
-typedef struct
-{
-    uint8_t start_marker;
-    uint8_t packet_type;
-    uint16_t data_size;
-    char* data;
-    uint8_t end_marker;
-} OutgoingLogPacketToAndroid;
 #pragma pack() // Reset packing alignment to default
 
 void get_block();
