@@ -1,11 +1,15 @@
 [submodule "include/CException"]
 	path = include/CException
-	url = https://github.com/topherbuckley/CException.git
+	url = git@github.com:topherbuckley/CException.git
 
 [submodule "include/max77958_rp2040"]
 	path = include/max77958_rp2040
-	url = https://github.com/topherbuckley/max77958_rp2040.git
+	url = git@github.com:topherbuckley/max77958_rp2040.git
 
 [submodule "include/unity"]
 	path = include/unity
-	url = https://github.com/ThrowTheSwitch/Unity.git
+	url = git@github.com:ThrowTheSwitch/Unity.git
+
+[submodule "include/TinyFrame"]
+	path = include/TinyFrame
+	url = git@github.com:MightyPork/TinyFrame.git
