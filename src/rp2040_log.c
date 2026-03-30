@@ -8,6 +8,7 @@
 #include "pico/multicore.h"
 #include "hardware/uart.h"
 #include "hardware/gpio.h"
+#include "crc.h"
 
 // Use the UART definitions from CMakeLists.txt
 #if PICO_DEFAULT_UART == 0
@@ -127,6 +128,22 @@ void rp2040_log(int level, const char* format, ...) {
 // Function to retrieve the total number of bytes within the log_array
 uint16_t rp2040_get_byte_count() {
    return log_buffer.byte_count;
+}
+
+// Function to retrieve the crc value of log commands
+uint16_t rp2040_get_crc(uint16_t initial_crc) {
+    uint16_t crc = initial_crc;
+    uint16_t current = log_buffer.head;
+
+    for (int i = 0; i < LOG_BUFFER_LINE_COUNT; i++) {
+        uint16_t size = log_buffer.log_array_line_size[current];
+        if (size > 1) {
+            // Calculate CRC for this specific line (excluding null terminator)
+            crc = crc16_ccitt((uint8_t*)log_buffer.log_array[current], size - 1, crc);
+        }
+        current = (current + 1) % LOG_BUFFER_LINE_COUNT;
+    }
+    return crc;
 }
 
 void rp2040_log_flush(){
