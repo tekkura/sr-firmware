@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include "robot.h"
 #include "rp2040_log.h"
+#include "tusb.h"
 #include "version.h"
 
 static IncomingPacketFromAndroid incoming_packet_from_android;
@@ -14,6 +15,22 @@ static OutgoingVersionPacketAndroid outgoing_version_packet_to_android;
 
 void handle_packet(IncomingPacketFromAndroid *packet);
 static RP2040_STATE rp2040_state_;
+
+/**
+ * Optimized CDC Write
+ * Bypasses the pico_stdio layer to write directly to the TinyUSB hardware FIFO.
+ * Flushes immediately to trigger transmission.
+ */
+static void cdc_write_optimized(const void* buf, uint32_t len) {
+    // Check if CDC is connected to avoid blocking or errors
+    if (!tud_cdc_n_connected(0)) return;
+
+    uint32_t written = tud_cdc_n_write(0, buf, len);
+    (void)written; // Suppression of unused variable warning
+
+    // Force immediate transmission of the USB frame
+    tud_cdc_n_write_flush(0);
+}
 
 void serial_comm_manager_init(RP2040_STATE* rp2040_state){
     rp2040_state_ = *rp2040_state;
@@ -37,10 +54,7 @@ static void reset_packet_and_send_nack(int8_t *start_idx, int8_t *end_idx, uint1
     *buffer_index = 0;
     memset(&incoming_packet_from_android, 0, sizeof(IncomingPacketFromAndroid));
     outgoing_packet_to_android.packet_type = NACK;
-    uint8_t* nack_bytes = (uint8_t*)&outgoing_packet_to_android;
-    for (int j = 0; j < sizeof(outgoing_packet_to_android); j++){
-        putchar(nack_bytes[j]);
-    }
+    cdc_write_optimized(&outgoing_packet_to_android, sizeof(outgoing_packet_to_android));
 }
 
 // reads data from the UART and stores it in buffer. If no data is available, returns immediately.
@@ -53,35 +67,35 @@ void get_block() {
     uint16_t buffer_index= 0;
     uint8_t i = 0;
     uint8_t MAX_SERIAL_GET_COUNT = 100;
-    
+
     int c = getchar_timeout_us(100);
     // Only process data after finding the START_MARKER
     if (c != PICO_ERROR_TIMEOUT && c == START_MARKER){
         start_idx = buffer_index;
-	// After finding the start marker get the rest of the packet or until MAX_SERIAL_GET_COUNT
-	// to prevent an infinite loop
-	// + 1 to accomodate for the packet_type
+        // After finding the start marker get the rest of the packet or until MAX_SERIAL_GET_COUNT
+        // to prevent an infinite loop
+        // + 1 to accomodate for the packet_type
         while (buffer_index < (ANDROID_BUFFER_LENGTH_IN + 1) || i == MAX_SERIAL_GET_COUNT) {
             c = getchar_timeout_us(100);
-    
-    	    if (c != PICO_ERROR_TIMEOUT){
-    	        if (buffer_index == 0){
-    	    	    // First byte after start marker is the command
-    	    	    incoming_packet_from_android.packet_type = (c & 0xFF);
-    	    	    buffer_index++;
-    	        }else{
-		    // -2 to accomodate for the start marker and packet_type
-    	    	    incoming_packet_from_android.data[buffer_index - 1] = (c & 0xFF);
-    	    	    buffer_index++;
-    	        }
-    	    }else {
-    	        rp2040_log("Timeout while reading packet. Resetting state.\n");
+
+            if (c != PICO_ERROR_TIMEOUT){
+                if (buffer_index == 0){
+                    // First byte after start marker is the command
+                    incoming_packet_from_android.packet_type = (c & 0xFF);
+                    buffer_index++;
+                }else{
+                    // -2 to accomodate for the start marker and packet_type
+                    incoming_packet_from_android.data[buffer_index - 1] = (c & 0xFF);
+                    buffer_index++;
+                }
+            }else {
+                rp2040_log("Timeout while reading packet. Resetting state.\n");
                 reset_packet_and_send_nack(&start_idx, &end_idx, &buffer_index);
                 return;
-	    }
-    	    i++;
+            }
+            i++;
         }
-	c = getchar_timeout_us(100);
+        c = getchar_timeout_us(100);
         if (c != PICO_ERROR_TIMEOUT && c == END_MARKER){
             // Calculate the length of the packet
             uint16_t packet_length = end_idx - start_idx;
@@ -108,76 +122,65 @@ void get_block() {
 }
 
 void handle_packet(IncomingPacketFromAndroid *packet){
-    uint8_t* bytes;
     // Assign the same packet type to the outgoing packet for verification on Android end
     switch (packet->packet_type){
-    	case GET_LOG:
-	    outgoing_log_packet_to_android.packet_type = packet->packet_type;
+        case GET_LOG:
+            outgoing_log_packet_to_android.packet_type = packet->packet_type;
 
-	    putchar(outgoing_log_packet_to_android.start_marker);
-	    putchar(outgoing_log_packet_to_android.packet_type);
+            cdc_write_optimized(&outgoing_log_packet_to_android.start_marker, 1);
+            cdc_write_optimized(&outgoing_log_packet_to_android.packet_type, 1);
 
-	    rp2040_log_acquire_lock();
-	    outgoing_log_packet_to_android.data_size = rp2040_get_byte_count();
+            rp2040_log_acquire_lock();
+            outgoing_log_packet_to_android.data_size = rp2040_get_byte_count();
 
-	    // put uint16_t data_size via putchar
-	    putchar(outgoing_log_packet_to_android.data_size & 0xFF);
-	    putchar((outgoing_log_packet_to_android.data_size >> 8) & 0xFF);
+            cdc_write_optimized(&outgoing_log_packet_to_android.data_size, 2);
 
-	    rp2040_log_flush();
-	    rp2040_log_release_lock();
+            // Use the callback to flush logs directly via the optimized path
+            rp2040_log_flush(cdc_write_optimized);
+            rp2040_log_release_lock();
 
-	    putchar(outgoing_log_packet_to_android.end_marker);
-	    break;
-	case SET_MOTOR_LEVEL:
+            cdc_write_optimized(&outgoing_log_packet_to_android.end_marker, 1);
+            break;
+        case SET_MOTOR_LEVEL:
             outgoing_packet_to_android.packet_type = packet->packet_type;
-	    // Clear the state
+            // Clear the state
             memset(&rp2040_state_, 0, sizeof(rp2040_state_));
-	    // Copy the motor levels from the packet to the rp2040_state_
+            // Copy the motor levels from the packet to the rp2040_state_
             memcpy(&rp2040_state_.MotorsState.ControlValues.left, &packet->data[0], sizeof(uint8_t));
-	    memcpy(&rp2040_state_.MotorsState.ControlValues.right, &packet->data[1], sizeof(uint8_t));
-	    set_motor_levels(&rp2040_state_);
+            memcpy(&rp2040_state_.MotorsState.ControlValues.right, &packet->data[1], sizeof(uint8_t));
+            set_motor_levels(&rp2040_state_);
             // Add STATE to response
             get_state(&rp2040_state_);
-	    outgoing_packet_to_android.data = rp2040_state_;
+            outgoing_packet_to_android.data = rp2040_state_;
 
-	    // Print the outgoing packet chars
-            bytes = (uint8_t*)&outgoing_packet_to_android;
-            for (int i = 0; i < sizeof(outgoing_packet_to_android); i++){
-                putchar(bytes[i]);
-            }
-	    break;
-	case GET_STATE:
+            // Use direct CDC write for the whole packet
+            cdc_write_optimized(&outgoing_packet_to_android, sizeof(outgoing_packet_to_android));
+            break;
+        case GET_STATE:
             outgoing_packet_to_android.packet_type = packet->packet_type;
-	    // Clear the state
+            // Clear the state
             memset(&rp2040_state_, 0, sizeof(rp2040_state_));
             // Add STATE to response
             get_state(&rp2040_state_);
-	    outgoing_packet_to_android.data = rp2040_state_;
+            outgoing_packet_to_android.data = rp2040_state_;
 
-	    // Print the outgoing packet chars
-            bytes = (uint8_t*)&outgoing_packet_to_android;
-            for (int i = 0; i < sizeof(outgoing_packet_to_android); i++){
-                putchar(bytes[i]);
-            }
-	    break;
-    case GET_VERSION:
-        outgoing_version_packet_to_android.packet_type = packet->packet_type;
-        outgoing_version_packet_to_android.data.version_major = FW_VERSION_MAJOR;
-        outgoing_version_packet_to_android.data.version_minor = FW_VERSION_MINOR;
-        outgoing_version_packet_to_android.data.version_patch = FW_VERSION_PATCH;
+            // Use direct CDC write for the whole packet
+            cdc_write_optimized(&outgoing_packet_to_android, sizeof(outgoing_packet_to_android));
+            break;
+        case GET_VERSION:
+            outgoing_version_packet_to_android.packet_type = packet->packet_type;
+            outgoing_version_packet_to_android.data.version_major = FW_VERSION_MAJOR;
+            outgoing_version_packet_to_android.data.version_minor = FW_VERSION_MINOR;
+            outgoing_version_packet_to_android.data.version_patch = FW_VERSION_PATCH;
 
-        bytes = (uint8_t*)&outgoing_version_packet_to_android;
-        for (int i = 0; i < sizeof(outgoing_version_packet_to_android); i++){
-            putchar(bytes[i]);
-        }
-
-        break;
-	case RESET_STATE:
-		// TODO
-		break;
-	default:
-		outgoing_packet_to_android.packet_type = NACK;
-		break;
+            cdc_write_optimized(&outgoing_version_packet_to_android, sizeof(outgoing_version_packet_to_android));
+            break;
+        case RESET_STATE:
+            // TODO
+            break;
+        default:
+            outgoing_packet_to_android.packet_type = NACK;
+            cdc_write_optimized(&outgoing_packet_to_android, sizeof(outgoing_packet_to_android));
+            break;
     }
 }
