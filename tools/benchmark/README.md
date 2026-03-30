@@ -64,14 +64,19 @@ Using `#ifndef BOARD_PICO` macros, custom-PCB-only initializations (I2C, battery
 
 ## Protocol Details (SET_MOTOR_LEVEL)
 
-The tool targets the specific `SET_MOTOR_LEVEL` path for Milestone 1:
+The tool targets the `SET_MOTOR_LEVEL` TinyFrame command and sends a two-byte
+motor payload (`left`, `right`):
 
 * **Baud Rate:** 115200 (Virtual CDC)
-* **Start Marker:** `0xFE`
-* **Command:** `0x01` (SET_MOTOR_LEVEL)
-* **End Marker:** `0xFF`
-* **TX Packet:** 5 Bytes `[START, CMD, 0x00, 0x00, END]`
-* **RX Expected Response:** 34 Bytes normally, or 50 Bytes when `LATENCY_BENCHMARK=ON` (the Pico appends the `LatencyMeasurements` telemetry after `RP2040_STATE`).
+* **TinyFrame SOF:** `0x01`
+* **Command:** `0x04` (`SET_MOTOR_LEVEL`)
+* **TX Payload:** 2 bytes `[left, right]`
+* **TX Frame:** 11 bytes consisting of SOF, 1-byte ID, 2-byte big-endian
+  payload length, command type, CRC16-ARC header checksum, payload, and
+  CRC16-ARC payload checksum
+* **RX Expected Frame:** 38 bytes normally (7-byte TinyFrame header, 29-byte
+  `RP2040_STATE` payload, and 2-byte payload checksum), or 54 bytes when
+  `LATENCY_BENCHMARK=ON` (the Pico appends 16-byte `LatencyMeasurements`).
 
 ## Expected Output
 

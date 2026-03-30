@@ -20,14 +20,14 @@ To enforce a **Hard Failure** during connection initiation if the App and Firmwa
 - Add a new command ID to the protocol.
 - **Tasks**:
     - Update `include/serial_comm_manager.h`: `#define GET_VERSION 0x06`.
-    - Update `PROTOCOL.md` to document the response format (a framed packet containing the SemVer string).
+    - Update `PROTOCOL.md` to document the response format (a framed packet containing three binary SemVer component bytes: major, minor, patch).
     - Implement the listener in `src/serial_comm_manager.c` to respond to `GET_VERSION` with the constants from `version.h`.
 
 ### 3. Android Host: Whitelist Enforcement
 - The Android App becomes responsible for validating the connection.
 - **Tasks**:
     - On USB-Serial connection, immediately send `GET_VERSION`.
-    - Compare the received string against an internal **Compatibility Whitelist**.
+    - Compare the received three version bytes against an internal **Compatibility Whitelist**.
     - **Logic**:
         - **Pass**: If Major version matches and Minor version is within the supported range.
         - **Fail**: If version is unrecognized or outside supported bounds.
@@ -74,7 +74,7 @@ To enforce a **Hard Failure** during connection initiation if the App and Firmwa
 
 1.  **Connection Initiation**: Android App establishes physical link.
 2.  **Discovery**: Android App sends `GET_VERSION` (0x06).
-3.  **Reporting**: Firmware responds with its version (e.g., `0.2.0`).
+3.  **Reporting**: Firmware responds with three bytes for major, minor, and patch (e.g., `0x00 0x02 0x00` for `0.2.0`).
 4.  **Enforcement**: Android App validates the version against the whitelist (Phase 1) or manifest (Phase 2).
 5.  **Outcome**:
     - **Success**: Proceed to standard operation.
