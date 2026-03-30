@@ -1,8 +1,7 @@
 /**
- * EdgeForge Labs - Milestone 1: Host-Side Test Harness
+ * EdgeForge Labs - Milestone 3: Host-Side Test Harness
  * USB CDC RTT Benchmark Tool
- * * Purpose: Emulates Android host packets to measure Round-Trip Time (RTT)
- * Protocol: Tekkura (Start=0xFE, End=0xFF, Cmd=0x01)
+ * Protocol: Length-Prefix + CRC16 (Start=0x01, Cmd=0x01)
  */
 
 #include <iostream>
@@ -24,12 +23,50 @@
 
 // --- CONFIGURATION ---
 const char* DEFAULT_PORT = "/dev/ttyACM0";
-const uint8_t START_MARKER = 0xFE;
-const uint8_t END_MARKER   = 0xFF;
+const uint8_t START_MARKER = 0x01;
 const uint8_t CMD_SET_MOTOR = 0x01;
 const int BAUDRATE = B115200;
 const int TEST_ITERATIONS = 100;
-const int EXPECTED_RESPONSE_SIZE = 34;
+const int EXPECTED_RESPONSE_SIZE = 35; // SOF(1) + LEN(2) + CMD(1) + DATA(29) + CRC(2)
+
+// --- CRC16-CCITT ---
+uint16_t crc16_ccitt(const uint8_t *data, size_t length, uint16_t initial) {
+    uint16_t crc = initial;
+    for (size_t i = 0; i < length; i++) {
+        crc ^= (uint16_t)data[i] << 8;
+        for (int j = 0; j < 8; j++) {
+            if (crc & 0x8000) {
+                crc = (crc << 1) ^ 0x1021;
+            } else {
+                crc <<= 1;
+            }
+        }
+    }
+    return crc;
+}
+
+std::vector<uint8_t> wrap_packet(uint8_t cmd, const std::vector<uint8_t>& payload) {
+    std::vector<uint8_t> pkt;
+    pkt.push_back(START_MARKER);
+    
+    uint16_t len = (uint16_t)payload.size() + 1; // payload + cmd
+    pkt.push_back(len & 0xFF);
+    pkt.push_back((len >> 8) & 0xFF);
+    pkt.push_back(cmd);
+    for (uint8_t b : payload) pkt.push_back(b);
+    
+    // CRC over [LEN_L, LEN_H, CMD, PAYLOAD]
+    uint8_t len_bytes[2] = { (uint8_t)(len & 0xFF), (uint8_t)((len >> 8) & 0xFF) };
+    uint16_t crc = crc16_ccitt(len_bytes, 2, 0xFFFF);
+    crc = crc16_ccitt(&cmd, 1, crc);
+    if (!payload.empty()) {
+        crc = crc16_ccitt(payload.data(), payload.size(), crc);
+    }
+    
+    pkt.push_back(crc & 0xFF);
+    pkt.push_back((crc >> 8) & 0xFF);
+    return pkt;
+}
 
 class SerialPort {
 public:
@@ -89,7 +126,7 @@ Stats calculate_stats(const std::vector<double>& latencies, int total_sent) {
 
 int main(int argc, char* argv[]) {
     const char* port = (argc > 1) ? argv[1] : DEFAULT_PORT;
-    std::cout << "--- USB CDC RTT Benchmark (Host Harness) ---" << std::endl;
+    std::cout << "--- USB CDC RTT Benchmark (Length-Prefix + CRC) ---" << std::endl;
     
     try {
         SerialPort serial(port);
@@ -100,7 +137,8 @@ int main(int argc, char* argv[]) {
         std::this_thread::sleep_for(std::chrono::seconds(5));
         serial.flush();
         
-        std::vector<uint8_t> tx_packet = {START_MARKER, CMD_SET_MOTOR, 0x00, 0x00, END_MARKER};
+        std::vector<uint8_t> payload = {0x00, 0x00};
+        std::vector<uint8_t> tx_packet = wrap_packet(CMD_SET_MOTOR, payload);
 
         std::cout << "Starting measurement loop..." << std::endl;
         
@@ -119,7 +157,24 @@ int main(int argc, char* argv[]) {
                     rx.push_back(c);
                     if (rx.size() == EXPECTED_RESPONSE_SIZE) {
                         t_end = std::chrono::high_resolution_clock::now();
-                        if (rx[0] == START_MARKER && rx[1] == CMD_SET_MOTOR) status = 1;
+                        
+                        // 1. Validate Start Marker
+                        if (rx[0] != START_MARKER) break;
+                        
+                        // 2. Validate Length (rx[1], rx[2])
+                        uint16_t rx_len = (uint16_t)rx[1] | ((uint16_t)rx[2] << 8);
+                        if (rx_len != (EXPECTED_RESPONSE_SIZE - 6 + 1)) break; // Data + Cmd
+                        
+                        // 3. Validate Command ID
+                        if (rx[3] != CMD_SET_MOTOR) break;
+                        
+                        // 4. Validate CRC16
+                        uint16_t received_crc = (uint16_t)rx[EXPECTED_RESPONSE_SIZE-2] | ((uint16_t)rx[EXPECTED_RESPONSE_SIZE-1] << 8);
+                        uint16_t calculated_crc = crc16_ccitt(&rx[1], EXPECTED_RESPONSE_SIZE - 3, 0xFFFF);
+                        
+                        if (calculated_crc == received_crc) {
+                            status = 1;
+                        }
                         break;
                     }
                 }
