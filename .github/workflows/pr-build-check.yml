@@ -13,5 +13,7 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - name: build
         run: mkdir build && cd build && cmake .. && make -j4
