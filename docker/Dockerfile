@@ -21,7 +21,6 @@ RUN echo "add-auto-load-safe-path /project/.gdbinit" >> /root/.gdbinit
 RUN apt-get update && apt-get install -y \
     build-essential \
     git \
-    wget \
     libtool \
     pkg-config \
     texinfo \
@@ -29,7 +28,6 @@ RUN apt-get update && apt-get install -y \
     gcc-arm-none-eabi \
     libnewlib-arm-none-eabi \
     libstdc++-arm-none-eabi-newlib \
-    tar \
     python3 \
     python3-pip \
     libssl-dev \
@@ -52,15 +50,3 @@ RUN git clone --branch sdk-2.0.0 https://github.com/raspberrypi/openocd.git $EXT
     ./configure && \
     make -j $(nproc) && \
     make install
-
-# Download and extract CException release
-RUN mkdir -p $EXTERNAL_LIBRARIES_DIR/CException
-RUN wget -q https://github.com/ThrowTheSwitch/CException/archive/refs/tags/v1.3.4.tar.gz -O $EXTERNAL_LIBRARIES_DIR/CException.tar.gz \
-    && tar -xzf $EXTERNAL_LIBRARIES_DIR/CException.tar.gz --strip-components=1 -C $EXTERNAL_LIBRARIES_DIR/CException \
-    && rm $EXTERNAL_LIBRARIES_DIR/CException.tar.gz
-
-# Download and extract max77958_rp2040 release
-RUN mkdir -p $EXTERNAL_LIBRARIES_DIR/max77958_rp2040
-RUN wget -q https://github.com/topherbuckley/max77958_rp2040/archive/refs/tags/v0.0.1.tar.gz -O $EXTERNAL_LIBRARIES_DIR/max77958_rp2040.tar.gz \
-    && tar -xzf $EXTERNAL_LIBRARIES_DIR/max77958_rp2040.tar.gz --strip-components=1 -C $EXTERNAL_LIBRARIES_DIR/max77958_rp2040 \
-    && rm $EXTERNAL_LIBRARIES_DIR/max77958_rp2040.tar.gz
