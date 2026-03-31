@@ -26,12 +26,25 @@ This repo hosts the firmware used by the [rp2040](https://www.raspberrypi.com/do
 
 The above wiring diagram assumes you have the debugprobe firmware running on your Raspberry Pi Pico. See [here](https://www.raspberrypi.com/documentation/microcontrollers/pico-series.html#debugging-using-another-pico-series-device) for documenation on how to do this.
 
-The recommended way to build, flash, and debug the firmware is by using the provided Docker image and Makefile. All dependencies are managed via Docker for a reproducible and easy workflow.
+The recommended way to build, flash, and debug the firmware is by using the provided Docker image and Makefile. The Docker image provides the toolchain and SDK, while project dependencies under `include/` are managed as git submodules.
 
 ## Pulling the Docker Image
 First, pull the Docker image:
 ```bash
 docker pull topher217/smartphone-robot-firmware:latest
+```
+
+## Cloning With Submodules
+Third-party dependencies in `include/` are tracked as git submodules and are part of the build.
+
+Clone the repository with:
+```bash
+git clone --recursive <repo-url>
+```
+
+If you already cloned the repository, initialize the submodules with:
+```bash
+git submodule update --init --recursive
 ```
 
 ## Building the Firmware

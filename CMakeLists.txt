@@ -20,20 +20,7 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "Debug" CACHE STRING "Build type" FORCE)
 endif()
 
-# Define external dependencies
-set(EXTERNAL_DEPS
-    CException
-    max77958_rp2040
-)
-
-# Set paths for external dependencies
-set(EXTERNAL_LIBRARIES_DIR "$ENV{EXTERNAL_LIBRARIES_DIR}" CACHE PATH "Directory containing external libraries")
 set(PICO_SDK_PATH "$ENV{PICO_SDK_PATH}" CACHE PATH "Path to Pico SDK")
-
-# Check for required environment variables
-if("${EXTERNAL_LIBRARIES_DIR}" STREQUAL "")
-    message(FATAL_ERROR "EXTERNAL_LIBRARIES_DIR is not defined or empty.\nYou must use the Docker container to build this project.")
-endif()
 
 if("${PICO_SDK_PATH}" STREQUAL "")
     message(FATAL_ERROR "PICO_SDK_PATH is not defined or empty.\nYou must use the Docker container to build this project.")
@@ -72,7 +59,7 @@ message(STATUS "SOURCES: ${SOURCES}")
 # Add executable
 add_executable(robot
     ${SOURCES}
-    $ENV{EXTERNAL_LIBRARIES_DIR}/CException/lib/CException.c
+    ${CMAKE_CURRENT_LIST_DIR}/include/CException/lib/CException.c
 )
 
 pico_generate_pio_header(robot ${CMAKE_CURRENT_LIST_DIR}/src/quadrature_encoder.pio)
@@ -106,8 +93,8 @@ target_link_libraries(robot pico_stdlib pico_multicore hardware_pwm)
 target_include_directories(robot PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/include
     ${CMAKE_CURRENT_LIST_DIR}/..
-    $ENV{EXTERNAL_LIBRARIES_DIR}/CException/lib
-    $ENV{EXTERNAL_LIBRARIES_DIR}/max77958_rp2040
+    ${CMAKE_CURRENT_LIST_DIR}/include/CException/lib
+    ${CMAKE_CURRENT_LIST_DIR}/include/max77958_rp2040
 )
 
 # Add additional libraries
@@ -149,22 +136,3 @@ add_custom_target(debug
     COMMENT "Starting debug session"
     DEPENDS robot
 )
-
-include(ExternalProject)
-
-# Define external dependencies
-set(EXTERNAL_DEPS
-    CException
-    max77958_rp2040
-)
-
-foreach(dep IN LISTS EXTERNAL_DEPS)
-    ExternalProject_Add(
-        ${dep}
-        SOURCE_DIR $ENV{EXTERNAL_LIBRARIES_DIR}/${dep}
-        CONFIGURE_COMMAND ""
-        BUILD_COMMAND ""
-        INSTALL_COMMAND ""
-        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-    )
-endforeach()
