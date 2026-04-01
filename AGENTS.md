@@ -19,6 +19,7 @@ Correctness
 - Flag behavioral changes outside the stated milestone scope.
 - Ensure build, benchmark, and protocol/documentation changes remain consistent with the implementation.
 - Be explicit about unsupported commands, partial implementations, benchmark gaps, and protocol mismatches.
+- When raising a finding, prefer to also suggest a concrete fix, preferred resolution, or next verification step so the review is actionable instead of purely critical.
 
 Commit/history hygiene
 - Commits should be focused and reviewable.
@@ -31,3 +32,8 @@ When to request changes
 - Unclear or unsafe behavior changes
 - Build or review workflow regressions
 - Noisy history or unclear commit intent
+
+Review style
+- Findings should be specific and technically grounded.
+- Prefer actionable review comments over purely descriptive criticism.
+- When possible, point to the likely remediation path, not just the symptom.
