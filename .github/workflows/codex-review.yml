@@ -2,7 +2,7 @@ name: Codex PR Review
 
 on:
   pull_request_target:
-    types: [opened, reopened]
+    types: [opened, reopened, synchronize, ready_for_review]
   issue_comment:
     types: [created]
 
@@ -44,8 +44,6 @@ jobs:
       base_sha: ${{ steps.resolve.outputs.base_sha }}
       pr_body: ${{ steps.resolve.outputs.pr_body }}
       author_association: ${{ steps.resolve.outputs.author_association }}
-      milestone_number: ${{ steps.resolve.outputs.milestone_number }}
-      milestone_title: ${{ steps.resolve.outputs.milestone_title }}
       should_run_downstream: ${{ steps.resolve.outputs.should_run_downstream }}
       gate_reason: ${{ steps.resolve.outputs.gate_reason }}
     steps:
@@ -56,11 +54,9 @@ jobs:
           script: |
             const eventName = context.eventName;
             const expectedCommand = '#codex-review';
-            const expectedAssociations = ['MEMBER', 'OWNER'];
             const isIssueComment = eventName === 'issue_comment';
             const isPullRequestComment = Boolean(context.payload.issue?.pull_request);
             const receivedCommentBody = context.payload.comment?.body ?? '';
-            const receivedCommentAuthorAssociation = context.payload.comment?.author_association ?? '';
             const commentCommandMatches = receivedCommentBody === expectedCommand;
             let pr = context.payload.pull_request;
 
@@ -69,11 +65,11 @@ jobs:
                 core.setFailed('issue_comment is not on a pull request');
                 return;
               }
-              const pull_number = context.issue.number;
+              const pullNumber = context.issue.number;
               const response = await github.rest.pulls.get({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                pull_number,
+                pull_number: pullNumber,
               });
               pr = response.data;
             }
@@ -83,40 +79,27 @@ jobs:
               return;
             }
 
-            const prAuthorAssociation = pr.author_association || '';
-            const headRef = pr.head?.ref || '';
-            const baseRef = pr.base?.ref || '';
-            const isMilestoneBranch = (ref) => ref.startsWith('milestone/') || ref.startsWith('milestones/');
-            const milestoneBranchGatePassed = isMilestoneBranch(headRef) || isMilestoneBranch(baseRef);
             const commandGatePassed = !isIssueComment || (isPullRequestComment && commentCommandMatches);
-            const shouldRunDownstream = commandGatePassed && milestoneBranchGatePassed;
             let gateReason = 'ok';
 
             if (isIssueComment && !isPullRequestComment) {
               gateReason = 'not_pr_comment';
             } else if (isIssueComment && !commentCommandMatches) {
               gateReason = 'bad_command';
-            } else if (!milestoneBranchGatePassed) {
-              gateReason = 'non_milestone_branch';
             }
 
             core.info(`Gate check: expected event trigger command for issue_comment "${expectedCommand}", received "${receivedCommentBody}"`);
             core.info(`Gate check: expected issue_comment on PR=true, received ${String(isPullRequestComment)}`);
-            core.info(`Gate check: expected comment author association in [${expectedAssociations.join(', ')}], received "${receivedCommentAuthorAssociation}"`);
-            core.info(`Gate check: expected PR author association in [${expectedAssociations.join(', ')}], received "${prAuthorAssociation}"`);
-            core.info(`Gate check: expected head/base ref under milestone/*, received head_ref="${headRef}", base_ref="${baseRef}", milestoneBranchGatePassed=${String(milestoneBranchGatePassed)}`);
-            core.info(`Gate evaluation: commandGatePassed=${String(commandGatePassed)}, shouldRunDownstream=${String(shouldRunDownstream)}, gateReason="${gateReason}"`);
+            core.info(`Gate evaluation: commandGatePassed=${String(commandGatePassed)}, gateReason="${gateReason}"`);
 
             core.setOutput('pull_number', String(pr.number));
-            core.setOutput('head_ref', headRef);
-            core.setOutput('base_ref', baseRef);
+            core.setOutput('head_ref', pr.head?.ref || '');
+            core.setOutput('base_ref', pr.base?.ref || '');
             core.setOutput('head_sha', pr.head?.sha || '');
             core.setOutput('base_sha', pr.base?.sha || '');
             core.setOutput('pr_body', pr.body || '');
-            core.setOutput('author_association', prAuthorAssociation);
-            core.setOutput('milestone_number', pr.milestone?.number ? String(pr.milestone.number) : '');
-            core.setOutput('milestone_title', pr.milestone?.title || '');
-            core.setOutput('should_run_downstream', String(shouldRunDownstream));
+            core.setOutput('author_association', pr.author_association || '');
+            core.setOutput('should_run_downstream', String(commandGatePassed));
             core.setOutput('gate_reason', gateReason);
 
   rebase-check:
@@ -130,18 +113,7 @@ jobs:
           ref: ${{ needs.resolve-pr-context.outputs.head_sha }}
           fetch-depth: 0
 
-      - name: Rebase check bypass for milestone head branches
-        if: |
-          startsWith(needs.resolve-pr-context.outputs.head_ref, 'milestone/') ||
-          startsWith(needs.resolve-pr-context.outputs.head_ref, 'milestones/')
-        shell: bash
-        run: |
-          echo "Bypassing rebase-check for milestone head branch: ${{ needs.resolve-pr-context.outputs.head_ref }}"
-
       - name: Ensure PR is rebased onto base
-        if: |
-          !startsWith(needs.resolve-pr-context.outputs.head_ref, 'milestone/') &&
-          !startsWith(needs.resolve-pr-context.outputs.head_ref, 'milestones/')
         shell: bash
         run: |
           git fetch --no-tags origin ${{ needs.resolve-pr-context.outputs.base_sha }}
@@ -162,20 +134,11 @@ jobs:
       summary: ${{ steps.parse_review.outputs.summary }}
       findings_json: ${{ steps.parse_review.outputs.findings_json }}
     steps:
-      - name: Checkout PR merge ref
+      - name: Checkout PR head
         uses: actions/checkout@v4
         with:
           ref: ${{ needs.resolve-pr-context.outputs.head_sha }}
           fetch-depth: 0
-
-      - name: Debug workflow refs
-        shell: bash
-        run: |
-          echo "GITHUB_WORKFLOW_REF=$GITHUB_WORKFLOW_REF"
-          echo "GITHUB_REF=$GITHUB_REF"
-          echo "GITHUB_SHA=$GITHUB_SHA"
-          echo "--- workflow file (first 120 lines) ---"
-          sed -n '1,120p' .github/workflows/codex-review.yml
 
       - name: Fetch PR base and head
         shell: bash
@@ -183,51 +146,13 @@ jobs:
           git fetch --no-tags origin ${{ needs.resolve-pr-context.outputs.base_sha }}
           git fetch --no-tags origin ${{ needs.resolve-pr-context.outputs.head_sha }}
 
-      - name: Resolve migration guide
-        id: guide
-        shell: bash
-        run: |
-          num="${{ needs.resolve-pr-context.outputs.milestone_number }}"
-          if [ -z "$num" ]; then
-            echo "PR has no milestone set."
-            exit 1
-          fi
-
-          title="${{ needs.resolve-pr-context.outputs.milestone_title }}"
-          if [ -z "$title" ]; then
-            echo "PR has no milestone title set."
-            exit 1
-          fi
-
-          # Sanitize title for filename matching
-          safe=$(echo "$title" | sed -E 's/[^A-Za-z0-9._-]+/_/g' | sed -E 's/^_+|_+$//g')
-          glob="docs/migrations/${safe}.md"
-          matches=$(ls $glob 2>/dev/null || true)
-          count=$(echo "$matches" | sed '/^$/d' | wc -l | tr -d ' ')
-          if [ "$count" -ne 1 ]; then
-            echo "Expected exactly one migration guide for milestone title: $title"
-            echo "Sanitized title: $safe"
-            echo "Attempted match: $glob"
-            echo "Match count: $count"
-            if [ -n "$matches" ]; then
-              echo "Matches:"
-              echo "$matches"
-            fi
-            exit 1
-          fi
-
-          echo "GUIDE_PATH=$matches" >> "$GITHUB_ENV"
-
       - name: Build Codex prompt
         shell: bash
         run: |
-          cat .github/codex/prompts/review.md > /tmp/codex_prompt.md
+          cat .github/codex/review.md > /tmp/codex_prompt.md
           echo "" >> /tmp/codex_prompt.md
           echo "AGENTS instructions (from HEAD):" >> /tmp/codex_prompt.md
           cat AGENTS.md >> /tmp/codex_prompt.md
-          echo "" >> /tmp/codex_prompt.md
-          echo "Migration guide (from HEAD): $GUIDE_PATH" >> /tmp/codex_prompt.md
-          cat "$GUIDE_PATH" >> /tmp/codex_prompt.md
           echo "" >> /tmp/codex_prompt.md
           echo "PR description (from GitHub):" >> /tmp/codex_prompt.md
           cat <<'EOF' >> /tmp/codex_prompt.md
