@@ -149,11 +149,36 @@ jobs:
       - name: Build Codex prompt
         shell: bash
         run: |
+          GUIDE_PATH=""
+          case "${{ needs.resolve-pr-context.outputs.head_ref }}" in
+            feature/milestone-1-benchmark) GUIDE_PATH="docs/milestones/Milestone1_HostSideTestHarness.md" ;;
+            feature/milestone-2-tinyframe) GUIDE_PATH="docs/milestones/Milestone2_TinyFrame.md" ;;
+            feature/milestone-3-crc-framing) GUIDE_PATH="docs/milestones/Milestone3_LengthPrefixCRC.md" ;;
+            feature/milestone-4-cdc) GUIDE_PATH="docs/milestones/Milestone4_CDCWriteOptimization.md" ;;
+          esac
+
+          if [ -z "$GUIDE_PATH" ]; then
+            case "${{ needs.resolve-pr-context.outputs.base_ref }}" in
+              feature/milestone-1-benchmark) GUIDE_PATH="docs/milestones/Milestone1_HostSideTestHarness.md" ;;
+              feature/milestone-2-tinyframe) GUIDE_PATH="docs/milestones/Milestone2_TinyFrame.md" ;;
+              feature/milestone-3-crc-framing) GUIDE_PATH="docs/milestones/Milestone3_LengthPrefixCRC.md" ;;
+              feature/milestone-4-cdc) GUIDE_PATH="docs/milestones/Milestone4_CDCWriteOptimization.md" ;;
+            esac
+          fi
+
           cat .github/codex/review.md > /tmp/codex_prompt.md
           echo "" >> /tmp/codex_prompt.md
           echo "AGENTS instructions (from HEAD):" >> /tmp/codex_prompt.md
           cat AGENTS.md >> /tmp/codex_prompt.md
           echo "" >> /tmp/codex_prompt.md
+          echo "PR head ref: ${{ needs.resolve-pr-context.outputs.head_ref }}" >> /tmp/codex_prompt.md
+          echo "PR base ref: ${{ needs.resolve-pr-context.outputs.base_ref }}" >> /tmp/codex_prompt.md
+          echo "" >> /tmp/codex_prompt.md
+          if [ -n "$GUIDE_PATH" ] && [ -f "$GUIDE_PATH" ]; then
+            echo "Matching milestone guide (from HEAD): $GUIDE_PATH" >> /tmp/codex_prompt.md
+            cat "$GUIDE_PATH" >> /tmp/codex_prompt.md
+            echo "" >> /tmp/codex_prompt.md
+          fi
           echo "PR description (from GitHub):" >> /tmp/codex_prompt.md
           cat <<'EOF' >> /tmp/codex_prompt.md
           ${{ needs.resolve-pr-context.outputs.pr_body }}
