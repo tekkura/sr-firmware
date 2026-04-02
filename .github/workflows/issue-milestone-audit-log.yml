@@ -1,0 +1,126 @@
+name: Issue/Milestone Audit Log
+
+on:
+  milestone:
+    types: [created, edited, opened, closed, deleted]
+  issues:
+    types:
+      [
+        opened,
+        edited,
+        deleted,
+        closed,
+        reopened,
+        assigned,
+        unassigned,
+        labeled,
+        unlabeled,
+        milestoned,
+        demilestoned,
+        locked,
+        unlocked,
+        transferred,
+        pinned,
+        unpinned,
+      ]
+  issue_comment:
+    types: [created, edited, deleted]
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  append-audit-record:
+    if: ${{ github.run_attempt == '1' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify audit push token is configured
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${{ secrets.AUDIT_LOG_PUSH_TOKEN }}" ]; then
+            echo "AUDIT_LOG_PUSH_TOKEN is not configured."
+            exit 1
+          fi
+
+      - name: Checkout audit-log branch
+        uses: actions/checkout@v4
+        with:
+          ref: audit-log
+          fetch-depth: 0
+          token: ${{ secrets.AUDIT_LOG_PUSH_TOKEN }}
+
+      - name: Append event record
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p audit
+
+          raw_record=$(jq -c '{
+            timestamp: (now | todateiso8601),
+            event_ts: (
+              .comment.updated_at
+              // .comment.created_at
+              // .issue.updated_at
+              // .issue.created_at
+              // .milestone.updated_at
+              // .milestone.created_at
+              // (now | todateiso8601)
+            ),
+            repo: .repository.full_name,
+            event_name: env.GITHUB_EVENT_NAME,
+            action: .action,
+            actor: .sender.login,
+            run_id: env.GITHUB_RUN_ID,
+            run_attempt: env.GITHUB_RUN_ATTEMPT,
+            sender: {
+              login: .sender.login,
+              html_url: .sender.html_url
+            },
+            issue: (
+              if .issue then {
+                number: .issue.number,
+                title: .issue.title,
+                state: .issue.state,
+                html_url: .issue.html_url,
+                milestone: (.issue.milestone | if . then { number, title, state } else null end),
+                labels: (.issue.labels // [] | map(.name))
+              } else null end
+            ),
+            milestone: (
+              if .milestone then {
+                number: .milestone.number,
+                title: .milestone.title,
+                state: .milestone.state,
+                description: .milestone.description,
+                due_on: .milestone.due_on
+              } else null end
+            ),
+            comment: (
+              if .comment then {
+                id: .comment.id,
+                body: .comment.body,
+                html_url: .comment.html_url
+              } else null end
+            )
+          }' "$GITHUB_EVENT_PATH")
+
+          printf '%s\n' "$raw_record" >> audit/events.ndjson
+
+      - name: Commit and push audit record
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add audit/events.ndjson
+
+          if git diff --cached --quiet; then
+            echo "No audit event changes to commit."
+            exit 0
+          fi
+
+          git commit -m "Append audit record for ${{ github.event_name }}:${{ github.event.action }}"
+          git push origin HEAD:audit-log
