@@ -168,9 +168,14 @@ jobs:
 
           cat .github/codex/review.md > /tmp/codex_prompt.md
           echo "" >> /tmp/codex_prompt.md
-          echo "AGENTS instructions (from HEAD):" >> /tmp/codex_prompt.md
+          echo "Repository instructions (from HEAD):" >> /tmp/codex_prompt.md
           cat AGENTS.md >> /tmp/codex_prompt.md
           echo "" >> /tmp/codex_prompt.md
+          if [ -f docs/codex-review-policy.md ]; then
+            echo "PR review policy (from HEAD): docs/codex-review-policy.md" >> /tmp/codex_prompt.md
+            cat docs/codex-review-policy.md >> /tmp/codex_prompt.md
+            echo "" >> /tmp/codex_prompt.md
+          fi
           echo "PR head ref: ${{ needs.resolve-pr-context.outputs.head_ref }}" >> /tmp/codex_prompt.md
           echo "PR base ref: ${{ needs.resolve-pr-context.outputs.base_ref }}" >> /tmp/codex_prompt.md
           echo "" >> /tmp/codex_prompt.md
