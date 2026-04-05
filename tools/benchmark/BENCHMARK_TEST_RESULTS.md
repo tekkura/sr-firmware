@@ -24,4 +24,17 @@ Each row represents a separate benchmark test run
 | 100.000          | 5.922    | 15.936   | 10.807   | 1.093       |
 | 100.000          | 5.149    | 16.528   | 10.816   | 1.147       |
 
-What can I say other that this is a big improvement
+A big improvement in speed
+
+## Waiting for a full payload
+
+| Success Rate (%) | Min (ms) | Max (ms) | Avg (ms) | Jitter (ms) |
+|:-----------------|:---------|:---------|:---------|:------------|
+| 100.000          | 1.360    | 14.240   | 11.301   | 1.692       |
+| 100.000          | 3.820    | 38.904   | 11.821   | 3.333       |
+| 100.000          | 8.147    | 13.913   | 11.508   | 0.895       |
+| 100.000          | 3.424    | 31.191   | 11.754   | 2.748       |
+| 100.000          | 2.488    | 25.722   | 11.622   | 2.312       |
+| 100.000          | 1.128    | 29.015   | 11.356   | 2.693       |
+
+After reworking CDC so that it waits until all data is sent, the average and minimum time slightly increased, but it's still noticeably faster than legacy method. Jitter has also substantially increased

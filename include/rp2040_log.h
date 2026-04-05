@@ -19,8 +19,14 @@ typedef struct {
 
 void rp2040_log_init();
 void rp2040_log(const char *format, ...);
-// Flush logs via a callback, for streaming to protocols like direct CDC
-void rp2040_log_flush(void (*cb)(const void* buff, uint32_t len));
+
+/**
+ * Flush logs via a callback. 
+ * Callback must return true on success, false on failure.
+ * Entries are only cleared from the buffer on success.
+ */
+void rp2040_log_flush(bool (*cb)(const void* buff, uint32_t len));
+
 uint16_t rp2040_get_byte_count();
 void rp2040_orient_copy_buffer(char* output_array);
 void rp2040_log_acquire_lock();

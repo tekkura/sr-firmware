@@ -20,17 +20,58 @@ static RP2040_STATE rp2040_state_;
  * Optimized CDC Write
  * Bypasses the pico_stdio layer to write directly to the TinyUSB hardware FIFO.
  * Flushes immediately to trigger transmission.
+ * Returns true if all bytes were written, false on timeout.
  */
-static void cdc_write_optimized(const void* buf, uint32_t len) {
-    // Check if CDC is connected to avoid blocking or errors
-    if (!tud_cdc_n_connected(0)) return;
+static bool cdc_write_optimized(const void* buf, uint32_t len, bool flush) {
+    if (!tud_cdc_n_connected(0)) return false;
 
-    uint32_t written = tud_cdc_n_write(0, buf, len);
-    (void)written; // Suppression of unused variable warning
+    const uint8_t* p = (const uint8_t*) buf;
+    uint32_t remaining = len;
+    uint32_t retries = 0;
 
-    // Force immediate transmission of the USB frame
-    tud_cdc_n_write_flush(0);
+    // DETERMINISTIC PATH: If the whole packet fits in the FIFO, write it all at once.
+    // This avoids the retry/sleep logic for standard state packets.
+    uint32_t available = tud_cdc_n_write_available(0);
+    if (available >= len) {
+        tud_cdc_n_write(0, buf, len);
+        if (flush) tud_cdc_n_write_flush(0);
+        return true;
+    }
+
+    // RETRY PATH: Only used if FIFO is full (e.g. during heavy logging)
+    while (remaining > 0 && tud_cdc_n_connected(0)) {
+        uint32_t written = tud_cdc_n_write(0, p, remaining);
+        if (written > 0) {
+            p += written;
+            remaining -= written;
+            retries = 0;
+        } else {
+            if (++retries > WRITE_MAX_RETRIES) {
+                return false;
+            }
+
+#if CFG_TUSB_MCU == OPT_MCU_RP2040
+            tud_task();
+#endif
+            if (retries == WRITE_FLUSH_TRIGGER) {
+                // MECHANICAL FLUSH: If we are stuck, force a packet out to make room.
+                // We only do this after a couple of retries to allow for natural bus drainage.
+                tud_cdc_n_write_flush(0);
+            }
+
+            // Tight spin before sleeping to keep jitter low
+            if (retries > 1)
+                sleep_us(WRITE_RETRY_DELAY);
+        }
+    }
+
+    if (flush) tud_cdc_n_write_flush(0);
+
+    return remaining == 0;
 }
+
+#define cdc_write(buf, len) cdc_write_optimized(buf, len, true)
+#define cdc_write_no_flush(buf, len) cdc_write_optimized(buf, len, false)
 
 void serial_comm_manager_init(RP2040_STATE* rp2040_state){
     rp2040_state_ = *rp2040_state;
@@ -54,7 +95,7 @@ static void reset_packet_and_send_nack(int8_t *start_idx, int8_t *end_idx, uint1
     *buffer_index = 0;
     memset(&incoming_packet_from_android, 0, sizeof(IncomingPacketFromAndroid));
     outgoing_packet_to_android.packet_type = NACK;
-    cdc_write_optimized(&outgoing_packet_to_android, sizeof(outgoing_packet_to_android));
+    cdc_write(&outgoing_packet_to_android, sizeof(outgoing_packet_to_android));
 }
 
 // reads data from the UART and stores it in buffer. If no data is available, returns immediately.
@@ -121,26 +162,41 @@ void get_block() {
     }
 }
 
+/**
+ * Wrapper for log flushing that respects the optimized CDC write's timeout
+ */
+static bool log_flush_optimized_wrapper(const void* buf, uint32_t len) {
+    return cdc_write_no_flush(buf, len);
+}
+
 void handle_packet(IncomingPacketFromAndroid *packet){
     // Assign the same packet type to the outgoing packet for verification on Android end
     switch (packet->packet_type){
         case GET_LOG:
             outgoing_log_packet_to_android.packet_type = packet->packet_type;
 
-            cdc_write_optimized(&outgoing_log_packet_to_android.start_marker, 1);
-            cdc_write_optimized(&outgoing_log_packet_to_android.packet_type, 1);
-
             rp2040_log_acquire_lock();
             outgoing_log_packet_to_android.data_size = rp2040_get_byte_count();
 
-            cdc_write_optimized(&outgoing_log_packet_to_android.data_size, 2);
+            // COALESCE: Build header in a single buffer to reduce USB frames
+            uint8_t header[4];
+            header[0] = outgoing_log_packet_to_android.start_marker;
+            header[1] = outgoing_log_packet_to_android.packet_type;
+            header[2] = (uint8_t)(outgoing_log_packet_to_android.data_size & 0xFF);
+            header[3] = (uint8_t)((outgoing_log_packet_to_android.data_size >> 8) & 0xFF);
 
-            // Use the callback to flush logs directly via the optimized path
-            rp2040_log_flush(cdc_write_optimized);
+            if (!cdc_write_no_flush(header, 4)) {
+                rp2040_log_release_lock();
+                break;
+            }
+
+            // Use the wrapper to flush logs via the optimized path
+            rp2040_log_flush(log_flush_optimized_wrapper);
             rp2040_log_release_lock();
 
-            cdc_write_optimized(&outgoing_log_packet_to_android.end_marker, 1);
+            cdc_write(&outgoing_log_packet_to_android.end_marker, 1);
             break;
+
         case SET_MOTOR_LEVEL:
             outgoing_packet_to_android.packet_type = packet->packet_type;
             // Clear the state
@@ -154,7 +210,7 @@ void handle_packet(IncomingPacketFromAndroid *packet){
             outgoing_packet_to_android.data = rp2040_state_;
 
             // Use direct CDC write for the whole packet
-            cdc_write_optimized(&outgoing_packet_to_android, sizeof(outgoing_packet_to_android));
+            cdc_write(&outgoing_packet_to_android, sizeof(outgoing_packet_to_android));
             break;
         case GET_STATE:
             outgoing_packet_to_android.packet_type = packet->packet_type;
@@ -165,7 +221,7 @@ void handle_packet(IncomingPacketFromAndroid *packet){
             outgoing_packet_to_android.data = rp2040_state_;
 
             // Use direct CDC write for the whole packet
-            cdc_write_optimized(&outgoing_packet_to_android, sizeof(outgoing_packet_to_android));
+            cdc_write(&outgoing_packet_to_android, sizeof(outgoing_packet_to_android));
             break;
         case GET_VERSION:
             outgoing_version_packet_to_android.packet_type = packet->packet_type;
@@ -180,7 +236,7 @@ void handle_packet(IncomingPacketFromAndroid *packet){
             break;
         default:
             outgoing_packet_to_android.packet_type = NACK;
-            cdc_write_optimized(&outgoing_packet_to_android, sizeof(outgoing_packet_to_android));
+            cdc_write(&outgoing_packet_to_android, sizeof(outgoing_packet_to_android));
             break;
     }
 }
