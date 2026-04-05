@@ -16,7 +16,7 @@ jobs:
   codex-reply:
     if: |
       startsWith(github.event.comment.body, '#codex-reply') &&
-      contains(fromJSON('["MEMBER","OWNER","COLLABORATOR"]'), github.event.comment.author_association || '')
+      contains(fromJSON('["MEMBER","OWNER","COLLABORATOR","CONTRIBUTOR"]'), github.event.comment.author_association || '')
     runs-on: ubuntu-latest
     steps:
       - name: Resolve thread context
@@ -61,6 +61,8 @@ jobs:
             core.setOutput('pull_number', String(pr.number));
             core.setOutput('base_sha', pr.base?.sha || '');
             core.setOutput('head_sha', pr.head?.sha || '');
+            core.setOutput('base_ref', pr.base?.ref || '');
+            core.setOutput('head_ref', pr.head?.ref || '');
             core.setOutput('trigger_comment_id', String(triggerComment.id));
             core.setOutput('trigger_author', triggerComment.user?.login || 'unknown');
             core.setOutput('developer_response', developerResponse);
@@ -84,12 +86,15 @@ jobs:
         env:
           BASE_SHA: ${{ steps.context.outputs.base_sha }}
           HEAD_SHA: ${{ steps.context.outputs.head_sha }}
+          BASE_REF: ${{ steps.context.outputs.base_ref }}
+          HEAD_REF: ${{ steps.context.outputs.head_ref }}
           ORIGINAL_COMMENT: ${{ steps.context.outputs.original_comment }}
           DEVELOPER_RESPONSE: ${{ steps.context.outputs.developer_response }}
           THREAD_SUMMARY: ${{ steps.context.outputs.thread_summary }}
         run: |
           python3 - <<'PY'
           import os
+          from pathlib import Path
 
           prompt = """You are reviewing a developer's response to a prior Codex review comment in a PR thread.
 
@@ -124,6 +129,30 @@ jobs:
 
           with open("/tmp/codex_reply_prompt.md", "w", encoding="utf-8") as f:
               f.write(prompt)
+              repo_guidance = Path("AGENTS.md")
+              if repo_guidance.exists():
+                  f.write("\n\nRepository instructions (from HEAD):\n")
+                  f.write(repo_guidance.read_text(encoding="utf-8"))
+              review_policy = Path("docs/codex-review-policy.md")
+              if review_policy.exists():
+                  f.write("\n\nPR review policy (from HEAD):\n")
+                  f.write(review_policy.read_text(encoding="utf-8"))
+              milestone_guides = {
+                  "feature/milestone-1-benchmark": "docs/milestones/Milestone1_HostSideTestHarness.md",
+                  "feature/milestone-2-tinyframe": "docs/milestones/Milestone2_TinyFrame.md",
+                  "feature/milestone-3-crc-framing": "docs/milestones/Milestone3_LengthPrefixCRC.md",
+                  "feature/milestone-4-cdc": "docs/milestones/Milestone4_CDCWriteOptimization.md",
+              }
+              guide_path = milestone_guides.get(os.getenv("HEAD_REF", "")) or milestone_guides.get(os.getenv("BASE_REF", ""))
+              if guide_path:
+                  guide = Path(guide_path)
+                  if guide.exists():
+                      f.write(f"\n\nMatching milestone guide (from HEAD): {guide_path}\n")
+                      f.write(guide.read_text(encoding="utf-8"))
+              f.write("\n\nPR head ref:\n")
+              f.write(os.getenv("HEAD_REF", ""))
+              f.write("\n\nPR base ref:\n")
+              f.write(os.getenv("BASE_REF", ""))
               f.write("\n\nPR diff boundary:\n")
               f.write(f"git diff {os.getenv('BASE_SHA','')}...{os.getenv('HEAD_SHA','')}\n\n")
               f.write("Original codex review comment:\n")
