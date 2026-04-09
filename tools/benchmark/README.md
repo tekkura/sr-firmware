@@ -51,6 +51,18 @@ make benchmark
 
 ```
 
+The benchmark binary also supports a small direct CLI:
+
+```bash
+./benchmark
+./benchmark /dev/ttyACM1
+./benchmark --debug
+./benchmark /dev/ttyACM1 --debug
+```
+
+- If no port is provided, it defaults to `/dev/ttyACM0`.
+- `--debug` enables extra diagnostics for port selection and unexpected serial responses.
+
 ## Note about `robot.c` and Hardware Gating
 
 To test locally on a standard Raspberry Pi Pico while maintaining support for the `customPCB`, proper board gating was implemented.
