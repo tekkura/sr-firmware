@@ -133,7 +133,7 @@ TF_Result listener_get_log(TinyFrame *tf, TF_Msg *msg) {
  */
 TF_Result listener_set_motor_level(TinyFrame *tf, TF_Msg *msg) {
     record_command_received();
-    if (msg->len >= 2) {
+    if (msg->len == 2) {
         // Clear the local state cache
         memset(&outgoing_packet_to_android.state, 0, sizeof(RP2040_STATE));
 
@@ -160,7 +160,7 @@ TF_Result listener_set_motor_level(TinyFrame *tf, TF_Msg *msg) {
 
         TF_Respond(tf, &response);
     } else {
-        // Explicitly send NACK if the command data is invalid (wrong length)
+        // Explicitly send NACK if the command data is invalid (wrong fixed payload size)
         send_nack(tf, msg->frame_id);
     }
     return TF_STAY;
