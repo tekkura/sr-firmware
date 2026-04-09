@@ -242,19 +242,21 @@ int main(int argc, char* argv[]) {
         serial.flush();
 
         std::vector<uint8_t> payload = {0x00, 0x00}; // Left, Right motor levels
-        uint8_t last_id = 0;
-        std::vector<uint8_t> tx_packet = wrap_tinyframe(CMD_SET_MOTOR, payload, last_id);
-
-        if (debug) {
-            std::cout << "[DEBUG] Sending packet (" << tx_packet.size() << " bytes): ";
-            for(auto b : tx_packet) std::cout << std::hex << std::setw(2) << std::setfill('0') << (int)b << " ";
-            std::cout << std::dec << std::endl;
-        }
 
         std::cout << "Starting measurement loop..." << std::endl;
 
         for (int i = 0; i < TEST_ITERATIONS; i++) {
             serial.flush();
+            uint8_t last_id = 0;
+            std::vector<uint8_t> tx_packet = wrap_tinyframe(CMD_SET_MOTOR, payload, last_id);
+
+            if (debug) {
+                std::cout << "[DEBUG] Iteration " << i << " TX packet (" << tx_packet.size() << " bytes, id=0x"
+                          << std::hex << std::setw(2) << std::setfill('0') << (int)last_id << "): ";
+                for(auto b : tx_packet) std::cout << std::hex << std::setw(2) << std::setfill('0') << (int)b << " ";
+                std::cout << std::dec << std::setfill(' ') << std::endl;
+            }
+
             auto t_start = std::chrono::high_resolution_clock::now();
             serial.write_data(tx_packet);
 
