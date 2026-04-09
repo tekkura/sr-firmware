@@ -15,6 +15,7 @@
 #include <iomanip>
 #include <algorithm>
 #include <stdexcept>
+#include <string>
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -30,6 +31,42 @@ const uint8_t CMD_SET_MOTOR = 0x01;
 const int BAUDRATE = B115200;
 const int TEST_ITERATIONS = 100;
 const int EXPECTED_RESPONSE_SIZE = 34;
+
+struct BenchmarkOptions {
+    std::string port = DEFAULT_PORT;
+    bool debug = false;
+    bool show_help = false;
+};
+
+void print_usage(const char* program_name) {
+    std::cout << "Usage: " << program_name << " [port] [--debug] [--help]" << std::endl;
+    std::cout << "  port      Optional serial device path (default: " << DEFAULT_PORT << ")" << std::endl;
+    std::cout << "  --debug   Print extra serial benchmark diagnostics" << std::endl;
+    std::cout << "  -h, --help  Show this usage text" << std::endl;
+}
+
+BenchmarkOptions parse_args(int argc, char* argv[]) {
+    BenchmarkOptions options;
+    bool port_set = false;
+
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--debug") {
+            options.debug = true;
+        } else if (arg == "--help" || arg == "-h") {
+            options.show_help = true;
+        } else if (arg.rfind("--", 0) == 0) {
+            throw std::invalid_argument("Unknown option: " + arg);
+        } else if (!port_set) {
+            options.port = arg;
+            port_set = true;
+        } else {
+            throw std::invalid_argument("Unexpected extra positional argument: " + arg);
+        }
+    }
+
+    return options;
+}
 
 class SerialPort {
 public:
@@ -88,11 +125,28 @@ Stats calculate_stats(const std::vector<double>& latencies, int total_sent) {
 }
 
 int main(int argc, char* argv[]) {
-    const char* port = (argc > 1) ? argv[1] : DEFAULT_PORT;
+    BenchmarkOptions options;
+    try {
+        options = parse_args(argc, argv);
+    } catch (const std::exception& e) {
+        std::cerr << "[ERROR] " << e.what() << std::endl;
+        print_usage(argv[0]);
+        return 1;
+    }
+
+    if (options.show_help) {
+        print_usage(argv[0]);
+        return 0;
+    }
+
     std::cout << "--- USB CDC RTT Benchmark (Host Harness) ---" << std::endl;
     
     try {
-        SerialPort serial(port);
+        if (options.debug) {
+            std::cout << "[DEBUG] Using serial port: " << options.port << std::endl;
+        }
+
+        SerialPort serial(options.port.c_str());
         std::vector<double> results;
         results.reserve(TEST_ITERATIONS);
 
@@ -101,6 +155,14 @@ int main(int argc, char* argv[]) {
         serial.flush();
         
         std::vector<uint8_t> tx_packet = {START_MARKER, CMD_SET_MOTOR, 0x00, 0x00, END_MARKER};
+
+        if (options.debug) {
+            std::cout << "[DEBUG] TX packet:";
+            for (uint8_t byte : tx_packet) {
+                std::cout << " 0x" << std::hex << std::setw(2) << std::setfill('0') << (int)byte;
+            }
+            std::cout << std::dec << std::setfill(' ') << std::endl;
+        }
 
         std::cout << "Starting measurement loop..." << std::endl;
         
@@ -130,6 +192,17 @@ int main(int argc, char* argv[]) {
                 results.push_back(rtt.count());
                 if (i % 10 == 0) std::cout << "." << std::flush;
             } else {
+                if (options.debug) {
+                    if (rx.empty()) {
+                        std::cout << "\n[DEBUG] No response received before timeout." << std::endl;
+                    } else {
+                        std::cout << "\n[DEBUG] Unexpected response (" << rx.size() << " bytes):";
+                        for (uint8_t byte : rx) {
+                            std::cout << " 0x" << std::hex << std::setw(2) << std::setfill('0') << (int)byte;
+                        }
+                        std::cout << std::dec << std::setfill(' ') << std::endl;
+                    }
+                }
                 std::cout << "X" << std::flush;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
