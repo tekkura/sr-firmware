@@ -39,9 +39,10 @@ struct BenchmarkOptions {
 };
 
 void print_usage(const char* program_name) {
-    std::cout << "Usage: " << program_name << " [port] [--debug]" << std::endl;
+    std::cout << "Usage: " << program_name << " [port] [--debug] [--help]" << std::endl;
     std::cout << "  port      Optional serial device path (default: " << DEFAULT_PORT << ")" << std::endl;
     std::cout << "  --debug   Print extra serial benchmark diagnostics" << std::endl;
+    std::cout << "  -h, --help  Show this usage text" << std::endl;
 }
 
 BenchmarkOptions parse_args(int argc, char* argv[]) {
