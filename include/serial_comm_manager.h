@@ -6,7 +6,7 @@
 #include "rp2040_log.h"
 
 // Framing Markers
-#define START_MARKER 0x01
+#define START_MARKER 0xFE
 
 // Command IDs
 #define GET_LOG 0x00

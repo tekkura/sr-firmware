@@ -23,7 +23,7 @@
 
 // --- CONFIGURATION ---
 const char* DEFAULT_PORT = "/dev/ttyACM0";
-const uint8_t START_MARKER = 0x01;
+const uint8_t START_MARKER = 0xFE;
 const uint8_t CMD_SET_MOTOR = 0x01;
 const int BAUDRATE = B115200;
 const int TEST_ITERATIONS = 100;
