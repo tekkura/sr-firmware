@@ -19,7 +19,7 @@ The protocol uses [TinyFrame](https://github.com/MightyPork/TinyFrame) (v2.3.0) 
 | Hex ID | Name              | Description                         | Response Payload   |
 |:-------|:------------------|:------------------------------------|:-------------------|
 | `0x00` | `GET_LOG`         | Requests circular buffer logs       | `Multipart String` |
-| `0x01` | `SET_MOTOR_LEVEL` | Sets [Left, Right] PWM              | `RP2040_STATE`     |
+| `0x04` | `SET_MOTOR_LEVEL` | Sets [Left, Right] PWM              | `RP2040_STATE`     |
 | `0x03` | `GET_STATE`       | Requests current sensor/motor state | `RP2040_STATE`     |
 | `0x02` | `RESET_STATE`     | Currently doesn't do anything       | `RP2040_STATE`     |
 | `0xFC` | `NACK`            | Error indicator                     | None               |

@@ -7,7 +7,7 @@
 
 // TinyFrame Type IDs (Commands)
 #define GET_LOG 0x00
-#define SET_MOTOR_LEVEL 0x01
+#define SET_MOTOR_LEVEL 0x04
 #define RESET_STATE 0x02
 #define GET_STATE 0x03
 #define GET_VERSION 0x06

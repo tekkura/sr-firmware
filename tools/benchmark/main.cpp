@@ -25,7 +25,7 @@
 // --- CONFIGURATION ---
 const char* DEFAULT_PORT = "/dev/ttyACM0";
 const uint8_t TF_SOF = 0x01;
-const uint8_t CMD_SET_MOTOR = 0x01;
+const uint8_t CMD_SET_MOTOR = 0x04;
 const int BAUDRATE = B115200;
 const int TEST_ITERATIONS = 100;
 const int EXPECTED_PAYLOAD_SIZE = 29; // RP2040_STATE size
