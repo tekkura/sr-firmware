@@ -8,7 +8,7 @@ The protocol uses a lightweight custom framing structure designed for high-speed
 ### Frame Format
 | Byte Offset    | Field          | Size    | Description                                                    |
 |:---------------|:---------------|:--------|:---------------------------------------------------------------|
-| 0              | `START_MARKER` | 1 byte  | Constant `0x01` (SOH - Start of Header)                        |
+| 0              | `START_MARKER` | 1 byte  | Constant `0xFE` (SOH - Start of Header)                        |
 | 1-2            | `LENGTH`       | 2 bytes | Total length of Payload + Command ID (**Little-Endian**)       |
 | 3              | `COMMAND_ID`   | 1 byte  | Command Type (e.g., `0x01` for SET_MOTOR)                      |
 | 4 to (N+3)     | `PAYLOAD`      | N bytes | Actual data bytes                                              |
