@@ -5,10 +5,13 @@
 #include <stdio.h>
 #include "robot.h"
 #include "rp2040_log.h"
+#include "version.h"
 
 static IncomingPacketFromAndroid incoming_packet_from_android;
 static OutgoingPacketToAndroid outgoing_packet_to_android;
 static OutgoingLogPacketToAndroid outgoing_log_packet_to_android;
+static OutgoingVersionPacketAndroid outgoing_version_packet_to_android;
+
 void handle_packet(IncomingPacketFromAndroid *packet);
 static RP2040_STATE rp2040_state_;
 
@@ -154,6 +157,18 @@ void handle_packet(IncomingPacketFromAndroid *packet){
                 putchar(bytes[i]);
             }
 	    break;
+    case GET_VERSION:
+        outgoing_version_packet_to_android.packet_type = packet->packet_type;
+        outgoing_version_packet_to_android.data.version_major = FW_VERSION_MAJOR;
+        outgoing_version_packet_to_android.data.version_minor = FW_VERSION_MINOR;
+        outgoing_version_packet_to_android.data.version_patch = FW_VERSION_PATCH;
+
+        bytes = (uint8_t*)&outgoing_version_packet_to_android;
+        for (int i = 0; i < sizeof(outgoing_version_packet_to_android); i++){
+            putchar(bytes[i]);
+        }
+
+        break;
 	case RESET_STATE:
 		// TODO
 		break;
