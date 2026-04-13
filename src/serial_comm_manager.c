@@ -229,7 +229,7 @@ void handle_packet(IncomingPacketFromAndroid *packet){
             outgoing_version_packet_to_android.data.version_minor = FW_VERSION_MINOR;
             outgoing_version_packet_to_android.data.version_patch = FW_VERSION_PATCH;
 
-            cdc_write_optimized(&outgoing_version_packet_to_android, sizeof(outgoing_version_packet_to_android));
+            cdc_write_optimized(&outgoing_version_packet_to_android, sizeof(outgoing_version_packet_to_android), true);
             break;
         case RESET_STATE:
             // TODO
