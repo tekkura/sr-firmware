@@ -9,6 +9,7 @@
 #define SET_MOTOR_LEVEL 0x01
 #define RESET_STATE 0x02
 #define GET_STATE 0x03
+#define GET_VERSION 0x06
 
 #define NACK 0xFC
 #define ACK 0xFD
@@ -17,6 +18,10 @@
 
 #define ANDROID_BUFFER_LENGTH_IN _u(2)
 #define ANDROID_BUFFER_LENGTH_OUT _u(61) // +3 for start, command, and end marks for a 64 byte packet
+
+#define WRITE_MAX_RETRIES 15
+#define WRITE_RETRY_DELAY 5
+#define WRITE_FLUSH_TRIGGER 5
 
 #pragma pack(1) // Set packing alignment to 1 byte
 typedef struct
@@ -65,6 +70,13 @@ typedef struct
 
 typedef struct
 {
+    uint8_t version_major;
+    uint8_t version_minor;
+    uint8_t version_patch;
+} VERSION;
+
+typedef struct
+{
     uint8_t start_marker;
     uint8_t packet_type;
     uint8_t data[ANDROID_BUFFER_LENGTH_IN];
@@ -88,6 +100,15 @@ typedef struct
     char* data;
     uint8_t end_marker;
 } OutgoingLogPacketToAndroid;
+
+typedef struct
+{
+    uint8_t start_marker;
+    uint8_t packet_type;
+    uint16_t data_size;
+    VERSION data;
+    uint8_t end_marker;
+} OutgoingVersionPacketAndroid;
 #pragma pack() // Reset packing alignment to default
 
 void get_block();

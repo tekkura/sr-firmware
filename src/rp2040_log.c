@@ -90,17 +90,26 @@ uint16_t rp2040_get_byte_count() {
    // sum up the values witin log_array_line_size
    uint16_t byte_count = 0; 
    for (int i = 0; i < LOG_BUFFER_LINE_COUNT; i++) {
-	   byte_count += log_buffer.log_array_line_size[i] - 1;
+	   byte_count += (log_buffer.log_array_line_size[i] > 0) ? (log_buffer.log_array_line_size[i] - 1) : 0;
    }
    return byte_count;
 }
 
-void rp2040_log_flush(){
-    // printf each line within the log_array starting at the head
+/**
+ * Optimized flush that only clears entries if the callback reports success.
+ */
+void rp2040_log_flush(bool (*cb)(const void* buff, uint32_t len)){
     for (int i = 0; i < LOG_BUFFER_LINE_COUNT; i++) {
-	// only print up to log_array_line_size
-	printf("%.*s", log_buffer.log_array_line_size[log_buffer.head], log_buffer.log_array[log_buffer.head]);
-	log_buffer.head = (log_buffer.head + 1) % LOG_BUFFER_LINE_COUNT; // Update head correctly
+        uint16_t size = log_buffer.log_array_line_size[log_buffer.head];
+        if (size > 1) { 
+            // If the write fails, stop immediately and DO NOT clear this entry.
+            // This leaves the data in the buffer for a future retry.
+            if (!cb(log_buffer.log_array[log_buffer.head], size - 1)) {
+                return;
+            }
+        }
+        // Successfully sent, now we can clear it and advance
+        log_buffer.log_array_line_size[log_buffer.head] = 0;
+        log_buffer.head = (log_buffer.head + 1) % LOG_BUFFER_LINE_COUNT;
     }
 }
-
