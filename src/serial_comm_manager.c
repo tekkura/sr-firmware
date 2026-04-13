@@ -25,6 +25,10 @@ void serial_comm_manager_init(RP2040_STATE* rp2040_state){
     outgoing_log_packet_to_android.start_marker = START_MARKER;
     outgoing_log_packet_to_android.packet_type = GET_LOG;
     outgoing_log_packet_to_android.end_marker = END_MARKER;
+    outgoing_version_packet_to_android.start_marker = START_MARKER;
+    outgoing_version_packet_to_android.packet_type = GET_VERSION;
+    outgoing_version_packet_to_android.data_size = sizeof(VERSION);
+    outgoing_version_packet_to_android.end_marker = END_MARKER;
 }
 
 static void reset_packet_and_send_nack(int8_t *start_idx, int8_t *end_idx, uint16_t *buffer_index) {
