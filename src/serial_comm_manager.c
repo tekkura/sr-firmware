@@ -5,160 +5,206 @@
 #include <stdio.h>
 #include "robot.h"
 #include "rp2040_log.h"
+#include "crc.h"
+#include "version.h"
 
-static IncomingPacketFromAndroid incoming_packet_from_android;
-static OutgoingPacketToAndroid outgoing_packet_to_android;
-static OutgoingLogPacketToAndroid outgoing_log_packet_to_android;
-void handle_packet(IncomingPacketFromAndroid *packet);
 static RP2040_STATE rp2040_state_;
+static uint8_t rx_buffer[MAX_PAYLOAD_SIZE];
+
+void handle_packet(uint8_t cmd, const uint8_t *payload, uint16_t payload_len);
 
 void serial_comm_manager_init(RP2040_STATE* rp2040_state){
     rp2040_state_ = *rp2040_state;
-    incoming_packet_from_android.start_marker = START_MARKER;
-    incoming_packet_from_android.end_marker = END_MARKER;
-    outgoing_packet_to_android.start_marker = START_MARKER;
-    outgoing_packet_to_android.end_marker = END_MARKER;
-    outgoing_packet_to_android.data_size = sizeof(rp2040_state_);
-    outgoing_log_packet_to_android.start_marker = START_MARKER;
-    outgoing_log_packet_to_android.packet_type = GET_LOG;
-    outgoing_log_packet_to_android.end_marker = END_MARKER;
 }
 
-static void reset_packet_and_send_nack(int8_t *start_idx, int8_t *end_idx, uint16_t *buffer_index) {
-    *start_idx = -1;
-    *end_idx = -1;
-    *buffer_index = 0;
-    memset(&incoming_packet_from_android, 0, sizeof(IncomingPacketFromAndroid));
-    outgoing_packet_to_android.packet_type = NACK;
-    uint8_t* nack_bytes = (uint8_t*)&outgoing_packet_to_android;
-    for (int j = 0; j < sizeof(outgoing_packet_to_android); j++){
-        putchar(nack_bytes[j]);
+/**
+ * Sends a framed packet using a zero-copy streaming approach.
+ * Format: [SOF][LEN_L][LEN_H][CMD][PAYLOAD...][CRC_L][CRC_H]
+ * CRC is calculated over [LEN_L, LEN_H, CMD, PAYLOAD]
+ */
+void send_framed_packet(uint8_t cmd, const uint8_t* data, uint16_t len) {
+    uint16_t total_payload_len = len + 1; // cmd + data
+    uint8_t len_bytes[2];
+    len_bytes[0] = total_payload_len & 0xFF;
+    len_bytes[1] = (total_payload_len >> 8) & 0xFF;
+
+    // 1. Calculate CRC
+    uint16_t crc = crc16_ccitt(len_bytes, 2, 0xFFFF);
+    crc = crc16_ccitt(&cmd, 1, crc);
+    if (len > 0 && data != NULL) {
+        crc = crc16_ccitt(data, len, crc);
     }
+
+    // 2. Transmission
+    putchar(START_MARKER);
+    putchar(len_bytes[0]);
+    putchar(len_bytes[1]);
+    putchar(cmd);
+    if (len > 0 && data != NULL) {
+        for (uint16_t i = 0; i < len; i++) {
+            putchar(data[i]);
+        }
+    }
+    putchar(crc & 0xFF);
+    putchar((crc >> 8) & 0xFF);
 }
 
-// reads data from the UART and stores it in buffer. If no data is available, returns immediately.
-// if new data is available, reads it until the buffer is full or both start and stop markers detected
-// calls handle_block to process the data if both markers are detected
+/**
+ * Sends a log packet using a zero-copy streaming approach.
+ * Format: [SOF][LEN_L][LEN_H][CMD][LOG...][CRC_L][CRC_H]
+ * CRC is calculated over [LEN_L, LEN_H, CMD, LOG]
+ */
+void send_log_packet() {
+    rp2040_log_acquire_lock();
+    uint16_t total_payload_len = rp2040_get_byte_count() + 1; // cmd + data
+    uint8_t len_bytes[2];
+    len_bytes[0] = total_payload_len & 0xFF;
+    len_bytes[1] = (total_payload_len >> 8) & 0xFF;
+
+//    // 1. Calculate CRC
+    uint16_t crc = crc16_ccitt(len_bytes, 2, 0xFFFF);
+    uint8_t cmd = GET_LOG;
+    crc = crc16_ccitt(&cmd, 1, crc);
+    crc = rp2040_get_crc(crc);
+
+    // 2. Transmission
+    putchar(START_MARKER);
+    putchar(len_bytes[0]);
+    putchar(len_bytes[1]);
+    putchar(GET_LOG);
+    rp2040_log_flush();
+    putchar(crc & 0xFF);
+    putchar((crc >> 8) & 0xFF);
+
+    rp2040_log_release_lock();
+}
+
+/**
+ * Reads a single byte from UART with timeout.
+ */
+static inline int read_byte() {
+    return getchar_timeout_us(100); // 100us timeout
+}
+
+/**
+ * Receives a framed block from the host.
+ */
 void get_block() {
-    // initialize as -1 as a way of detecting the absence of each marker in the buffer
-    static int8_t start_idx = -1;
-    static int8_t end_idx = -1;
-    uint16_t buffer_index= 0;
-    uint8_t i = 0;
-    uint8_t MAX_SERIAL_GET_COUNT = 100;
-    
-    int c = getchar_timeout_us(100);
-    // Only process data after finding the START_MARKER
-    if (c != PICO_ERROR_TIMEOUT && c == START_MARKER){
-        start_idx = buffer_index;
-	// After finding the start marker get the rest of the packet or until MAX_SERIAL_GET_COUNT
-	// to prevent an infinite loop
-	// + 1 to accomodate for the packet_type
-        while (buffer_index < (ANDROID_BUFFER_LENGTH_IN + 1) || i == MAX_SERIAL_GET_COUNT) {
-            c = getchar_timeout_us(100);
-    
-    	    if (c != PICO_ERROR_TIMEOUT){
-    	        if (buffer_index == 0){
-    	    	    // First byte after start marker is the command
-    	    	    incoming_packet_from_android.packet_type = (c & 0xFF);
-    	    	    buffer_index++;
-    	        }else{
-		    // -2 to accomodate for the start marker and packet_type
-    	    	    incoming_packet_from_android.data[buffer_index - 1] = (c & 0xFF);
-    	    	    buffer_index++;
-    	        }
-    	    }else {
-    	        rp2040_log("Timeout while reading packet. Resetting state.\n");
-                reset_packet_and_send_nack(&start_idx, &end_idx, &buffer_index);
-                return;
-	    }
-    	    i++;
-        }
-	c = getchar_timeout_us(100);
-        if (c != PICO_ERROR_TIMEOUT && c == END_MARKER){
-            // Calculate the length of the packet
-            uint16_t packet_length = end_idx - start_idx;
-            if (packet_length >= sizeof(IncomingPacketFromAndroid)) {
-                // Call the handle_block function with the packet data
-                handle_packet(&incoming_packet_from_android);
-                // Reset the values of start and end idx to detect the next block
-                start_idx = -1;
-                end_idx = -1;
-                buffer_index = 0;
-                // Reset the packet
-                memset(&incoming_packet_from_android, 0, sizeof(IncomingPacketFromAndroid)); } else {
-                rp2040_log("Received incomplete packet. Resetting state.\n");
-                reset_packet_and_send_nack(&start_idx, &end_idx, &buffer_index);
-                return;
-            }
-        }else{
-            rp2040_log("Received packet with no end marker. Resetting state.\n");
-            reset_packet_and_send_nack(&start_idx, &end_idx, &buffer_index);
+    int c = read_byte();
+    if (c == PICO_ERROR_TIMEOUT || c != START_MARKER) return;
+
+    // Read Length (2 bytes)
+    int l1 = read_byte();
+    if (l1 == PICO_ERROR_TIMEOUT) {
+        send_framed_packet(NACK, NULL, 0);
+        return;
+    }
+
+    int l2 = read_byte();
+    if (l2 == PICO_ERROR_TIMEOUT) {
+        send_framed_packet(NACK, NULL, 0);
+        return;
+    }
+
+    uint16_t total_payload_len = (uint16_t)l1 | ((uint16_t)l2 << 8);
+    if (total_payload_len == 0 || total_payload_len > MAX_PAYLOAD_SIZE) {
+        send_framed_packet(NACK, NULL, 0);
+        return;
+    }
+
+    // Read Command + Payload
+    // Note: total_payload_len includes 1 byte for command ID
+    for (uint16_t i = 0; i < total_payload_len; i++) {
+        int b = read_byte();
+        if (b == PICO_ERROR_TIMEOUT) {
+            send_framed_packet(NACK, NULL, 0);
             return;
         }
 
+        rx_buffer[i] = (uint8_t)b;
     }
+
+    // Read CRC (2 bytes)
+    int c1 = read_byte();
+    if (c1 == PICO_ERROR_TIMEOUT) {
+        send_framed_packet(NACK, NULL, 0);
+        return;
+    }
+
+    int c2 = read_byte();
+    if (c2 == PICO_ERROR_TIMEOUT) {
+        send_framed_packet(NACK, NULL, 0);
+        return;
+    }
+
+    uint16_t received_crc = (uint16_t)c1 | ((uint16_t)c2 << 8);
+
+    // Verify CRC
+    uint8_t len_bytes[2] = {(uint8_t)l1, (uint8_t)l2};
+    uint16_t calculated_crc = crc16_ccitt(len_bytes, 2, 0xFFFF);
+    calculated_crc = crc16_ccitt(rx_buffer, total_payload_len, calculated_crc);
+
+    if (calculated_crc != received_crc) {
+        // Send NACK on integrity failure
+        send_framed_packet(NACK, NULL, 0);
+        return;
+    }
+
+    // Process Packet
+    uint8_t cmd = rx_buffer[0];
+    const uint8_t *payload = (total_payload_len > 1) ? &rx_buffer[1] : NULL;
+    uint16_t payload_len = total_payload_len - 1;
+
+    handle_packet(cmd, payload, payload_len);
 }
 
-void handle_packet(IncomingPacketFromAndroid *packet){
-    uint8_t* bytes;
-    // Assign the same packet type to the outgoing packet for verification on Android end
-    switch (packet->packet_type){
-    	case GET_LOG:
-	    outgoing_log_packet_to_android.packet_type = packet->packet_type;
+void handle_packet(uint8_t cmd, const uint8_t *payload, uint16_t payload_len) {
+    switch (cmd) {
+        case GET_LOG: {
+            send_log_packet();
+            break;
+        }
+        case SET_MOTOR_LEVEL: {
+            if (payload_len == 2) {
+                uint8_t left = payload[0];
+                uint8_t right = payload[1];
 
-	    putchar(outgoing_log_packet_to_android.start_marker);
-	    putchar(outgoing_log_packet_to_android.packet_type);
+                // Clear the state struct to avoid leaking stale bytes from prior commands
+                memset(&rp2040_state_, 0, sizeof(rp2040_state_));
 
-	    rp2040_log_acquire_lock();
-	    outgoing_log_packet_to_android.data_size = rp2040_get_byte_count();
+                rp2040_state_.MotorsState.ControlValues.left = left;
+                rp2040_state_.MotorsState.ControlValues.right = right;
+                set_motor_levels(&rp2040_state_);
 
-	    // put uint16_t data_size via putchar
-	    putchar(outgoing_log_packet_to_android.data_size & 0xFF);
-	    putchar((outgoing_log_packet_to_android.data_size >> 8) & 0xFF);
-
-	    rp2040_log_flush();
-	    rp2040_log_release_lock();
-
-	    putchar(outgoing_log_packet_to_android.end_marker);
-	    break;
-	case SET_MOTOR_LEVEL:
-            outgoing_packet_to_android.packet_type = packet->packet_type;
-	    // Clear the state
-            memset(&rp2040_state_, 0, sizeof(rp2040_state_));
-	    // Copy the motor levels from the packet to the rp2040_state_
-            memcpy(&rp2040_state_.MotorsState.ControlValues.left, &packet->data[0], sizeof(uint8_t));
-	    memcpy(&rp2040_state_.MotorsState.ControlValues.right, &packet->data[1], sizeof(uint8_t));
-	    set_motor_levels(&rp2040_state_);
-            // Add STATE to response
-            get_state(&rp2040_state_);
-	    outgoing_packet_to_android.data = rp2040_state_;
-
-	    // Print the outgoing packet chars
-            bytes = (uint8_t*)&outgoing_packet_to_android;
-            for (int i = 0; i < sizeof(outgoing_packet_to_android); i++){
-                putchar(bytes[i]);
+                get_state(&rp2040_state_);
+                send_framed_packet(SET_MOTOR_LEVEL, (uint8_t*)&rp2040_state_, sizeof(rp2040_state_));
+            } else {
+                send_framed_packet(NACK, NULL, 0);
             }
-	    break;
-	case GET_STATE:
-            outgoing_packet_to_android.packet_type = packet->packet_type;
-	    // Clear the state
+            break;
+        }
+        case GET_STATE: {
+            // Clear the state struct to avoid leaking stale bytes from prior commands
             memset(&rp2040_state_, 0, sizeof(rp2040_state_));
-            // Add STATE to response
-            get_state(&rp2040_state_);
-	    outgoing_packet_to_android.data = rp2040_state_;
 
-	    // Print the outgoing packet chars
-            bytes = (uint8_t*)&outgoing_packet_to_android;
-            for (int i = 0; i < sizeof(outgoing_packet_to_android); i++){
-                putchar(bytes[i]);
-            }
-	    break;
-	case RESET_STATE:
-		// TODO
-		break;
-	default:
-		outgoing_packet_to_android.packet_type = NACK;
-		break;
+            get_state(&rp2040_state_);
+            send_framed_packet(GET_STATE, (uint8_t*)&rp2040_state_, sizeof(rp2040_state_));
+            break;
+        }
+        case GET_VERSION: {
+            VERSION version;
+            version.version_major = FW_VERSION_MAJOR;
+            version.version_minor = FW_VERSION_MINOR;
+            version.version_patch = FW_VERSION_PATCH;
+
+            send_framed_packet(GET_VERSION, (uint8_t*)&version, sizeof(version));
+            break;
+        }
+        case RESET_STATE:
+            send_framed_packet(ACK, NULL, 0);
+            break;
+        default:
+            send_framed_packet(NACK, NULL, 0);
+            break;
     }
 }
