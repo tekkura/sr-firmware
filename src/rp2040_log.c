@@ -90,9 +90,24 @@ uint16_t rp2040_get_byte_count() {
    // sum up the values witin log_array_line_size
    uint16_t byte_count = 0; 
    for (int i = 0; i < LOG_BUFFER_LINE_COUNT; i++) {
-	   byte_count += log_buffer.log_array_line_size[i] - 1;
+	   byte_count += (log_buffer.log_array_line_size[i] > 0) ? (log_buffer.log_array_line_size[i] - 1) : 0;
    }
    return byte_count;
+}
+
+void rp2040_log_flush_cb(void (*cb)(void* ctx, const uint8_t* buff, uint32_t len), void* ctx){
+    // printf each line within the log_array starting at the head
+    for (int i = 0; i < LOG_BUFFER_LINE_COUNT; i++) {
+	// only process up to log_array_line_size
+        uint16_t size = log_buffer.log_array_line_size[log_buffer.head];
+        if (size > 1) { // 1 means just null terminator or \n maybe? Wait, vsnprintf adds null terminator.
+            // the size stored is len from vsnprintf which was calculated as + 1.
+            // so if it's "A", len is 2. size is 2.
+            cb(ctx, (const uint8_t*)log_buffer.log_array[log_buffer.head], size - 1);
+        }
+	log_buffer.log_array_line_size[log_buffer.head] = 0; // mark as processed
+	log_buffer.head = (log_buffer.head + 1) % LOG_BUFFER_LINE_COUNT; // Update head correctly
+    }
 }
 
 void rp2040_log_flush(){
@@ -103,4 +118,3 @@ void rp2040_log_flush(){
 	log_buffer.head = (log_buffer.head + 1) % LOG_BUFFER_LINE_COUNT; // Update head correctly
     }
 }
-
