@@ -14,6 +14,7 @@ DEFAULT_OUTPUT = "/tmp/firmware-uart.log"
 DIAG_END_MARKERS = (
     "EXT_MAX77958_I2C1_TEST: end",
     "DRV8830_SCOPE_TEST END",
+    "MAX77958_DIAG: end status poll",
 )
 CC_STATE_NAMES = {
     0: "NO_CONNECTION",
