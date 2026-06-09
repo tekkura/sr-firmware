@@ -5,6 +5,7 @@ JOBS ?= $(shell nproc)
 DOCKER_DEBUG_CONTAINER := smartphone-robot-debug
 ARCH ?= amd64
 LOGGER ?= USB
+LATENCY_BENCHMARK ?= OFF
 
 #  MILESTONE 1: BOARD SELECTION & VALIDATION 
 BOARD ?= customPCB
@@ -74,13 +75,14 @@ help:
 	@echo "  JOBS=N                - Number of parallel build jobs (default: The number of processor cores)"
 	@echo "  ARCH=amd64|arm64        - Specify architecture for all make targets (default: amd64)"
 	@echo "  LOGGER=USB|UART         - Specify logger interface (default: USB)"
+	@echo "  LATENCY_BENCHMARK=ON|OFF     - Enable firmware latency benchmark mode (default: OFF)"
 	@echo "  Example: make flash DOCKER_USB_DEVICE=/dev/ttyACM0"
 
 # Build firmware
 .PHONY: firmware
 firmware:
 	@echo "Building firmware in Docker with $(JOBS) jobs..."
-	$(DOCKER_RUN) bash -c "rm -rf build && mkdir build && cd build && cmake .. -DLOGGER=$(LOGGER) $(BOARD_FLAGS) && make -j$(JOBS)"
+	$(DOCKER_RUN) bash -c "rm -rf build && mkdir build && cd build && cmake .. -DLOGGER=$(LOGGER) -DLATENCY_BENCHMARK=$(LATENCY_BENCHMARK) $(BOARD_FLAGS) && make -j$(JOBS)"
 
 # Name for the persistent debug container
 DEBUG_CONTAINER := smartphone-robot-debug
