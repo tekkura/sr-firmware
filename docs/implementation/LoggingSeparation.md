@@ -90,31 +90,7 @@ Any background routines or command handlers (such as `GET_LOG` 0x00 inside `seri
 
 To measure latency bottleneck points (such as command decoding time and state machine processing overhead) under real-world conditions, we append timing markers directly to the primary command-response packets.
 
-To ensure **production builds** carry zero overhead and keep the original packet size, we control the packet structures using a build-time preprocessor macro: `ENABLE_LATENCY_BENCHMARK`.
-
-#### 2.1 Build Flag Definition (CMake)
-Define a formal option in `CMakeLists.txt` to trigger benchmark mode. This option is named `latencyBenchmark` and defaults to `OFF` (production mode):
-
-```cmake
-# In CMakeLists.txt
-option(latencyBenchmark "Compile firmware in latency benchmarking mode" OFF)
-
-if(latencyBenchmark)
-    add_compile_definitions(ENABLE_LATENCY_BENCHMARK=1)
-endif()
-```
-
-To compile the firmware in latency benchmarking mode, run:
-```bash
-cmake -DlatencyBenchmark=ON ..
-```
-
-To compile in production mode (which is the default):
-```bash
-cmake -DlatencyBenchmark=OFF ..
-```
-
-#### 2.2 Conditional Packet Structs (`include/serial_comm_manager.h`)
+#### 2.1 Conditional Packet Structs (`include/serial_comm_manager.h`)
 Modify the packet definitions using `#ifdef` preprocessor blocks. If `ENABLE_LATENCY_BENCHMARK` is enabled, the outgoing response packet structure is extended with a nested binary `TelemetryData` block. In production builds, this block is omitted entirely, keeping the packet structure compact and optimized:
 
 ```c
@@ -145,7 +121,7 @@ typedef struct
 #pragma pack()
 ```
 
-#### 2.3 Populating Timing Metrics (`src/serial_comm_manager.c`)
+#### 2.2 Populating Timing Metrics (`src/serial_comm_manager.c`)
 Modify the command execution and serial parsing loop to capture precise RP2040 system clock microseconds (`time_us_32()`). The measurements are conditionally recorded and transmitted back:
 
 ```c
