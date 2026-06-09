@@ -14,6 +14,7 @@ set(CMAKE_COLOR_MAKEFILE ON)
 # Build options
 option(USE_DOCKER "Build using Docker container" ON)
 option(USE_LOCAL "Build locally instead of Docker" OFF)
+option(LATENCY_BENCHMARK "Compile firmware in latency benchmarking mode" OFF)
 set(DRV8830_SCOPE_TEST "0" CACHE STRING "Enable DRV8830 back/forth scope test")
 set(DRV8830_SCOPE_TEST_CONTROL "0x7A" CACHE STRING "DRV8830 scope test forward control byte")
 set(DRV8830_SCOPE_TEST_DWELL_MS "750" CACHE STRING "DRV8830 scope test motor-on dwell in ms")
@@ -82,6 +83,10 @@ target_compile_definitions(robot PUBLIC
 # MILESTONE 1: BOARD GATING
 if(BUILD_FOR_PICO)
     target_compile_definitions(robot PUBLIC BOARD_PICO)
+endif()
+
+if(LATENCY_BENCHMARK)
+    target_compile_definitions(robot PUBLIC ENABLE_LATENCY_BENCHMARK=1)
 endif()
 
 pico_enable_stdio_uart(robot 0)

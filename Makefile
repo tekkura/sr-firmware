@@ -5,6 +5,7 @@ JOBS ?= $(shell nproc)
 DOCKER_DEBUG_CONTAINER := smartphone-robot-debug
 ARCH ?= amd64
 LOGGER ?= USB
+LATENCY_BENCHMARK ?= OFF
 DRV8830_SCOPE_TEST ?= 0
 DRV8830_SCOPE_TEST_CONTROL ?= 0x7A
 DRV8830_SCOPE_TEST_DWELL_MS ?= 750
@@ -86,6 +87,7 @@ help:
 	@echo "  JOBS=N                - Number of parallel build jobs (default: The number of processor cores)"
 	@echo "  ARCH=amd64|arm64        - Specify architecture for all make targets (default: amd64)"
 	@echo "  LOGGER=USB|UART         - Specify logger interface (default: USB)"
+	@echo "  LATENCY_BENCHMARK=ON|OFF     - Enable firmware latency benchmark mode (default: OFF)"
 	@echo "  DRV8830_SCOPE_TEST=0|1 - Enable DRV8830 back/forth scope test (default: 0)"
 	@echo "  Example: make flash DOCKER_USB_DEVICE=/dev/ttyACM0"
 
@@ -93,7 +95,7 @@ help:
 .PHONY: firmware
 firmware:
 	@echo "Building firmware in Docker with $(JOBS) jobs..."
-	$(DOCKER_RUN) bash -c "rm -rf build && mkdir build && cd build && cmake .. -DLOGGER=$(LOGGER) $(BOARD_FLAGS) $(DRV8830_SCOPE_FLAGS) && make -j$(JOBS)"
+	$(DOCKER_RUN) bash -c "rm -rf build && mkdir build && cd build && cmake .. -DLOGGER=$(LOGGER) -DLATENCY_BENCHMARK=$(LATENCY_BENCHMARK) $(BOARD_FLAGS) $(DRV8830_SCOPE_FLAGS) && make -j$(JOBS)"
 
 # Name for the persistent debug container
 DEBUG_CONTAINER := smartphone-robot-debug
