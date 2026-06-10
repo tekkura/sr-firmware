@@ -7,6 +7,7 @@ set(LOGGER "USB" CACHE STRING "Logging interface")
 if(NOT (LOGGER STREQUAL "USB" OR LOGGER STREQUAL "UART"))
   message(FATAL_ERROR "invalid logging interface: ${LOGGER}")
 endif()
+option(EXTERNAL_MAX77958_TEST "Probe an external MAX77958 on I2C1 and skip normal board bring-up" OFF)
 
 # Enable colored output
 set(CMAKE_COLOR_MAKEFILE ON)
@@ -99,6 +100,10 @@ if(DRV8830_SCOPE_TEST)
         DRV8830_SCOPE_TEST_OFF_MS=${DRV8830_SCOPE_TEST_OFF_MS}
         DRV8830_SCOPE_TEST_REPEAT=${DRV8830_SCOPE_TEST_REPEAT}
     )
+endif()
+
+if(EXTERNAL_MAX77958_TEST)
+    target_compile_definitions(robot PUBLIC EXTERNAL_MAX77958_TEST=1)
 endif()
 
 # Add the standard library to the build
