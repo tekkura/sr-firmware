@@ -14,6 +14,7 @@ set(CMAKE_COLOR_MAKEFILE ON)
 # Build options
 option(USE_DOCKER "Build using Docker container" ON)
 option(USE_LOCAL "Build locally instead of Docker" OFF)
+option(LATENCY_BENCHMARK "Compile firmware in latency benchmarking mode" OFF)
 
 # Set build type if not specified
 if(NOT CMAKE_BUILD_TYPE)
@@ -77,6 +78,10 @@ target_compile_definitions(robot PUBLIC
 # MILESTONE 1: BOARD GATING
 if(BUILD_FOR_PICO)
     target_compile_definitions(robot PUBLIC BOARD_PICO)
+endif()
+
+if(LATENCY_BENCHMARK)
+    target_compile_definitions(robot PUBLIC ENABLE_LATENCY_BENCHMARK=1)
 endif()
 
 pico_enable_stdio_uart(robot 0)
