@@ -51,6 +51,12 @@ make benchmark
 
 ```
 
+If the firmware is already flashed with `LATENCY_BENCHMARK=ON`, run:
+
+```bash
+make benchmark LATENCY_BENCHMARK=ON
+```
+
 ## Note about `robot.c` and Hardware Gating
 
 To test locally on a standard Raspberry Pi Pico while maintaining support for the `customPCB`, proper board gating was implemented.
@@ -65,7 +71,7 @@ The tool targets the specific `SET_MOTOR_LEVEL` path for Milestone 1:
 * **Command:** `0x01` (SET_MOTOR_LEVEL)
 * **End Marker:** `0xFF`
 * **TX Packet:** 5 Bytes `[START, CMD, 0x00, 0x00, END]`
-* **RX Expected Response:** 34 Bytes (The Pico responds by packing the entire `RP2040_STATE` structure).
+* **RX Expected Response:** 34 Bytes normally, or 50 Bytes when `LATENCY_BENCHMARK=ON` (the Pico appends the `LatencyMeasurements` telemetry after `RP2040_STATE`).
 
 ## Expected Output
 

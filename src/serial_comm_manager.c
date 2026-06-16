@@ -1,6 +1,7 @@
 #include "pico/types.h"
 #include "serial_comm_manager.h"
 #include "pico/stdio.h"
+#include "pico/time.h"
 #include <string.h>
 #include <stdio.h>
 #include "robot.h"
@@ -18,7 +19,13 @@ void serial_comm_manager_init(RP2040_STATE* rp2040_state){
     incoming_packet_from_android.end_marker = END_MARKER;
     outgoing_packet_to_android.start_marker = START_MARKER;
     outgoing_packet_to_android.end_marker = END_MARKER;
-    outgoing_packet_to_android.data_size = sizeof(rp2040_state_);
+
+#if defined(ENABLE_LATENCY_BENCHMARK)
+    outgoing_packet_to_android.data_size = sizeof(RP2040_STATE) + sizeof(LatencyMeasurements);
+#else
+    outgoing_packet_to_android.data_size = sizeof(RP2040_STATE);
+#endif
+
     outgoing_log_packet_to_android.start_marker = START_MARKER;
     outgoing_log_packet_to_android.packet_type = GET_LOG;
     outgoing_log_packet_to_android.end_marker = END_MARKER;
@@ -30,6 +37,10 @@ static void reset_packet_and_send_nack(int8_t *start_idx, int8_t *end_idx, uint1
     *buffer_index = 0;
     memset(&incoming_packet_from_android, 0, sizeof(IncomingPacketFromAndroid));
     outgoing_packet_to_android.packet_type = NACK;
+#ifdef ENABLE_LATENCY_BENCHMARK
+    outgoing_packet_to_android.telemetry.t4_timestamp_us = 0;
+    outgoing_packet_to_android.telemetry.t5_timestamp_us = 0;
+#endif
     uint8_t* nack_bytes = (uint8_t*)&outgoing_packet_to_android;
     for (int j = 0; j < sizeof(outgoing_packet_to_android); j++){
         putchar(nack_bytes[j]);
@@ -73,9 +84,13 @@ void get_block() {
                 return;
 	    }
     	    i++;
-        }
+	}
 	c = getchar_timeout_us(100);
         if (c != PICO_ERROR_TIMEOUT && c == END_MARKER){
+            end_idx = buffer_index + 2;
+#ifdef ENABLE_LATENCY_BENCHMARK
+            outgoing_packet_to_android.telemetry.t4_timestamp_us = time_us_64();
+#endif
             // Calculate the length of the packet
             uint16_t packet_length = end_idx - start_idx;
             if (packet_length >= sizeof(IncomingPacketFromAndroid)) {
@@ -133,6 +148,9 @@ void handle_packet(IncomingPacketFromAndroid *packet){
             // Add STATE to response
             get_state(&rp2040_state_);
 	    outgoing_packet_to_android.data = rp2040_state_;
+#ifdef ENABLE_LATENCY_BENCHMARK
+        outgoing_packet_to_android.telemetry.t5_timestamp_us = time_us_64();
+#endif
 
 	    // Print the outgoing packet chars
             bytes = (uint8_t*)&outgoing_packet_to_android;
@@ -147,6 +165,9 @@ void handle_packet(IncomingPacketFromAndroid *packet){
             // Add STATE to response
             get_state(&rp2040_state_);
 	    outgoing_packet_to_android.data = rp2040_state_;
+#ifdef ENABLE_LATENCY_BENCHMARK
+        outgoing_packet_to_android.telemetry.t5_timestamp_us = time_us_64();
+#endif
 
 	    // Print the outgoing packet chars
             bytes = (uint8_t*)&outgoing_packet_to_android;

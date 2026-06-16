@@ -170,7 +170,7 @@ shell:
 .PHONY: benchmark
 benchmark:
 	@echo "Building host benchmark in Docker..."
-	$(DOCKER_TEST_RUN) bash -c "cmake -S tools/benchmark -B tools/benchmark/build && cmake --build tools/benchmark/build -j$(JOBS)"
+	$(DOCKER_TEST_RUN) bash -c "cmake -S tools/benchmark -B tools/benchmark/build -DLATENCY_BENCHMARK=$(LATENCY_BENCHMARK) && cmake --build tools/benchmark/build -j$(JOBS)"
 	@echo "Running host benchmark in Docker..."
 	$(DOCKER_TEST_RUN) bash -c "./tools/benchmark/build/benchmark"
 

@@ -29,7 +29,11 @@ const uint8_t END_MARKER   = 0xFF;
 const uint8_t CMD_SET_MOTOR = 0x01;
 const int BAUDRATE = B115200;
 const int TEST_ITERATIONS = 100;
+#ifdef LATENCY_BENCHMARK
+const int EXPECTED_RESPONSE_SIZE = 50;
+#else
 const int EXPECTED_RESPONSE_SIZE = 34;
+#endif
 
 class SerialPort {
 public:
