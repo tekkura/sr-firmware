@@ -79,12 +79,23 @@ typedef struct
     uint8_t end_marker;
 } IncomingPacketFromAndroid;
 
+#ifdef ENABLE_LATENCY_BENCHMARK
+typedef struct
+{
+    uint64_t t4_timestamp_us;
+    uint64_t t5_timestamp_us;
+} LatencyMeasurements;
+#endif
+
 typedef struct
 {
     uint8_t start_marker;
     uint8_t packet_type;
     uint16_t data_size;
     RP2040_STATE data;
+#ifdef ENABLE_LATENCY_BENCHMARK
+    LatencyMeasurements telemetry;
+#endif
     uint8_t end_marker;
 } OutgoingPacketToAndroid;
 
