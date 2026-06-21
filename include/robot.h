@@ -68,6 +68,7 @@ bool call_queue_try_add_nonblocking(entry_func func, int32_t arg);
 void results_queue_try_add(void *func, int32_t arg);
 void set_motor_levels(RP2040_STATE *state);
 void get_state(RP2040_STATE* state);
+void get_fast_motor_state(RP2040_STATE* state);
 void get_battery_state(RP2040_STATE* state);
 
 #endif

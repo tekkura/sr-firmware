@@ -281,7 +281,6 @@ static int32_t drv8830_test_response(){
     test_drv8830_completed = true;
     return 0;
 }
-
 void drv8830_scope_test_run(){
 #ifdef DRV8830_SCOPE_TEST
     const uint8_t forward_control = ((uint8_t)DRV8830_SCOPE_TEST_CONTROL & 0xFC) | (1 << DRV8830_IN2_BIT);
