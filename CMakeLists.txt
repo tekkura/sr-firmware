@@ -7,6 +7,7 @@ set(LOGGER "USB" CACHE STRING "Logging interface")
 if(NOT (LOGGER STREQUAL "USB" OR LOGGER STREQUAL "UART"))
   message(FATAL_ERROR "invalid logging interface: ${LOGGER}")
 endif()
+option(TELEMETRY_TIMING_DIAG "Time get_state telemetry polling after startup" OFF)
 
 # Logging level
 set(LOG_LEVEL "WARNING" CACHE STRING "Logging level")
@@ -110,6 +111,10 @@ if(LOGGER STREQUAL "UART")
 endif()
 
 target_compile_definitions(robot PUBLIC LOG_LEVEL=${LOG_LEVEL_NUM})
+
+if(TELEMETRY_TIMING_DIAG)
+    target_compile_definitions(robot PUBLIC TELEMETRY_TIMING_DIAG=1)
+endif()
 
 if(DRV8830_SCOPE_TEST)
     target_compile_definitions(robot PUBLIC
