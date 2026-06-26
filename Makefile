@@ -42,6 +42,20 @@ else
   DOCKER_IMAGE_TAG := $(DOCKER_IMAGE):$(DOCKER_TAG)-$(ARCH)
 endif
 
+LOG_LEVEL ?= INFO
+
+ifneq ($(LOG_LEVEL), DEBUG)
+ifneq ($(LOG_LEVEL), INFO)
+ifneq ($(LOG_LEVEL), WARNING)
+ifneq ($(LOG_LEVEL), ERROR)
+ifneq ($(LOG_LEVEL), NONE)
+$(error Invalid LOG_LEVEL value: $(LOG_LEVEL). Must be 'DEBUG|INFO|WARNING|ERROR|NONE')
+endif
+endif
+endif
+endif
+endif
+
 DOCKER_RUN := docker run --rm -it \
     --device /dev/bus/usb:/dev/bus/usb \
     -v $(shell pwd):/project \

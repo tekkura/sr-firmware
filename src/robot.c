@@ -195,8 +195,8 @@ void on_start(){
     gpio_set_function(LOG_UART_RX_PIN, GPIO_FUNC_UART);
     #endif
 
-    rp2040_log("=== FIRMWARE RESTART ===\n");
-    rp2040_log("on_start\n");
+    rp2040_log_i("=== FIRMWARE RESTART ===\n");
+    rp2040_log_i("on_start\n");
     stdio_init_all();
     stdio_set_translate_crlf(driver, false);
     gpio_set_irq_callback(&robot_interrupt_handler);
@@ -217,7 +217,7 @@ void on_start(){
     #endif
 
     sleep_ms(1000);
-    rp2040_log("done waiting 2\n");
+    rp2040_log_i("done waiting 2\n");
 
     #ifndef BOARD_PICO
     bq27742_g1_init(BQ27742_G1_INTERRUPT_PIN);
@@ -234,9 +234,9 @@ void on_start(){
     encoder_init(&call_queue);
     #endif
     
-    rp2040_log("encoders initialize. Waiting 1 second\n");
+    rp2040_log_d("encoders initialize. Waiting 1 second\n");
     sleep_ms(1000);
-    rp2040_log("done waiting, Running unit tests.\n");
+    rp2040_log_d("done waiting, Running unit tests.\n");
 
     #ifndef BOARD_PICO
     set_voltage(MOTOR_LEFT, 2.5);
@@ -247,7 +247,7 @@ void on_start(){
        i++;
        tight_loop_contents();
     }
-    rp2040_log("done counting, turning off motors\n");
+    rp2040_log_d("done counting, turning off motors\n");
     set_voltage(MOTOR_LEFT, 0);
     set_voltage(MOTOR_RIGHT, 0);
     robot_unit_tests();
@@ -277,7 +277,7 @@ void on_start(){
 }
 
 void robot_unit_tests(){
-    rp2040_log("----------Running robot unit tests-----------\n");
+    rp2040_log_i("----------Running robot unit tests-----------\n");
     test_max77958_get_id();
     test_max77958_status_block_read_all();
     test_max77958_bc_ctrl1_read();
@@ -296,11 +296,11 @@ void robot_unit_tests(){
     test_ncp3901_interrupt();
     test_drv8830_get_faults();
     test_drv8830_interrupt();
-    rp2040_log("-----------robot unit tests complete-----------\n");
+    rp2040_log_i("-----------robot unit tests complete-----------\n");
 }
 
 void on_shutdown(){
-    rp2040_log("Shutting down\n");
+    rp2040_log_i("Shutting down\n");
 
     #ifndef BOARD_PICO
     max77958_shutdown(MAX77958_INTB);
@@ -329,7 +329,7 @@ void free_queues(){
 	results_queue_pop();
     }
     while (!queue_is_empty(&call_queue)){
-    	rp2040_log("free_queues: call_queue not empty\n");
+        rp2040_log_i("free_queues: call_queue not empty\n");
     	sleep_ms(500);
     }
     queue_free(&call_queue);
@@ -339,7 +339,7 @@ void free_queues(){
 static void signal_stop_core1(){
     queue_entry_t stop_entry = {stop_core1, 0};
     if(!queue_try_add(&call_queue, &stop_entry)){
-	rp2040_log("ERROR: call_queue is full");
+	rp2040_log_e("ERROR: call_queue is full");
         assert(false);
     }
 }
@@ -452,7 +452,7 @@ void results_queue_try_add(void *func, int32_t arg){
     queue_entry_t entry = {func, arg};
     //rp2040_log("call_queue currently has %i entries\n", queue_get_level(&call_queue));
     if(!queue_try_add(&results_queue, &entry)){
-        rp2040_log("ERROR:results_queue is full");
+        rp2040_log_e("ERROR:results_queue is full");
 	assert(false);
     }
 }
@@ -461,7 +461,7 @@ void call_queue_try_add(entry_func func, int32_t arg){
     queue_entry_t entry = {func, arg};
     //rp2040_log("call_queue currently has %i entries\n", queue_get_level(&call_queue));
     if(!queue_try_add(&call_queue, &entry)){
-        rp2040_log("ERROR: call_queue is full");
+        rp2040_log_e("ERROR: call_queue is full");
 	assert(false);
     }
 }
@@ -492,7 +492,7 @@ void i2c_write_error_handling(i2c_inst_t *i2c, uint8_t addr, const uint8_t *src,
         Throw(result);
     }
     Catch(e){
-	rp2040_log("ERROR: During i2c_write. Returned value of %i %i \n", result, e);
+	rp2040_log_e("ERROR: During i2c_write. Returned value of %i %i \n", result, e);
 	assert(false);
     }
 }
@@ -514,7 +514,7 @@ void i2c_read_error_handling(i2c_inst_t *i2c, uint8_t addr, uint8_t *dst, size_t
        Throw(result);
     }
     Catch(e){
-	rp2040_log("ERROR: During i2c_read. Returned value of %i %i \n", result, e);
+	rp2040_log_e("ERROR: During i2c_read. Returned value of %i %i \n", result, e);
 	assert(false);
     }
 }

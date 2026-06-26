@@ -59,7 +59,7 @@ uint16_t bq27742_g1_get_voltage(){
     bq27742_g1_read_bytes(0x08, return_buf, 2);
 
     voltage = (return_buf[1] << 8) | return_buf[0];
-    rp2040_log("Voltage: %d\n", (int) voltage);
+    rp2040_log_d("Voltage: %d\n", (int) voltage);
     return voltage;
 }
 
@@ -69,36 +69,33 @@ uint8_t bq27742_g1_get_safety_stats(){
     bq27742_g1_read_bytes(BQ27742_G1_REG_SAFETY_STATUS, return_buf, 2);
     
     uint8_t low_byte = return_buf[0];
-    bool error = false;
-    rp2040_log("SafetyStats: ");
-    if (low_byte & ISD_MASK){
-        rp2040_log("Internal Short condition detected, ");
-        error = true;
+    if (low_byte & (ISD_MASK | TDD_MASK | OTC_MASK | OTD_MASK | OVP_MASK | UVP_MASK)) {
+        rp2040_log_w("SafetyStats: ");
+
+        if (low_byte & ISD_MASK)
+            rp2040_log_w("Internal Short condition detected, ");
+
+        if (low_byte & TDD_MASK)
+            rp2040_log_w("Tab Disconnect condition detected, ");
+
+        if (low_byte & OTC_MASK)
+            rp2040_log_w("Overtemperature in charge condition detected, ");
+
+        if (low_byte & OTD_MASK)
+            rp2040_log_w("Overtemperature in discharge condition detected, ");
+
+        if (low_byte & OVP_MASK)
+            rp2040_log_w("Overvoltage condition detected, ");
+
+        if (low_byte & UVP_MASK)
+            rp2040_log_w("Undervoltage condition detected, ");
+        rp2040_log_w("\n");
+    } else {
+        rp2040_log_d("SafetyStats: ");
+        rp2040_log_d("No error detected in battery protection\n");
     }
-    if (low_byte & TDD_MASK){
-        rp2040_log("Tab Disconnect condition detected, ");
-        error = true;
-    }
-    if (low_byte & OTC_MASK){
-        rp2040_log("Overtemperature in charge condition detected, ");
-        error = true;
-    }
-    if (low_byte & OTD_MASK){
-        rp2040_log("Overtemperature in discharge condition detected, ");
-        error = true;
-    }
-    if (low_byte & OVP_MASK){
-        rp2040_log("Overvoltage condition detected, ");
-        error = true;
-    }
-    if (low_byte & UVP_MASK){
-        rp2040_log("Undervoltage condition detected, ");
-        error = true;
-    }
-    if (!error){
-        rp2040_log("No error detected in battery protection\n");
-    }
-  return low_byte;  
+
+    return low_byte;
 }
 
 uint16_t bq27742_g1_get_temp(){
@@ -114,7 +111,7 @@ uint16_t bq27742_g1_get_temp(){
     temperature_ = (temperature_ - 2731.5);
     temperature_ = temperature_ / 10.0;
     temperature = (uint16_t)temperature;
-    rp2040_log("Temperature: %d\n", (int)temperature);
+    rp2040_log_d("Temperature: %d\n", (int)temperature);
     return temperature; 
 }
 
@@ -124,9 +121,9 @@ uint8_t bq27742_g1_get_soh(){
     memset(send_buf, 0, sizeof send_buf);
     bq27742_g1_read_bytes(0x2e, return_buf, 2);
 
-    rp2040_log("SOH: 0x2e=%02x, 0x2f=%02x\n", return_buf[0], return_buf[1]);
+    rp2040_log_d("SOH: 0x2e=%02x, 0x2f=%02x\n", return_buf[0], return_buf[1]);
     //float soh = (float)return_buf[0] / 100;
-    rp2040_log("SOH: %02f\n", soh);
+    rp2040_log_d("SOH: %02f\n", soh);
     // Note in the user guide Section 4.1.24 the range of values is only from 0x00 to 0x64
     return return_buf[0];
 }
@@ -139,51 +136,45 @@ uint16_t bq27742_g1_get_flags(){
     uint16_t flags = (return_buf[1] << 8) | return_buf[0];
     bool error = false;
 
-    rp2040_log("Tags: ");
-    if (flags & BATHI_MASK){
-        rp2040_log("High battery voltage condition BATHI detected, ");
-        error = true;
+    if (flags & (BATHI_MASK | BATLOW_MASK | CHG_INH_MASK | FC_MASK | CHG_SUS_MASK | IMAX_MASK | CHG_MASK | SOC1_MASK | SOCF_MASK | DSG_MASK)) {
+        rp2040_log_w("Tags: ");
+        if (flags & BATHI_MASK)
+            rp2040_log_w("High battery voltage condition BATHI detected, ");
+
+        if (flags & BATLOW_MASK)
+            rp2040_log_w("Low battery voltage condition BATLOW detected, ");
+
+        if (flags & CHG_INH_MASK)
+            rp2040_log_w("Temperature is < T1 Temp or > T4 Temp while charging is not active. CHG_INH detected, ");
+
+        if (flags & FC_MASK)
+            rp2040_log_w("Charge termination reached and FC Set Percent = -1. Or SOC > FC Percent is not -1. FC detected, ");
+
+        if (flags & CHG_SUS_MASK)
+            rp2040_log_w("Temp < T1 Temp or > T5 Temp while charging active. CHG_SUS detected, ");
+
+        if (flags & IMAX_MASK)
+            rp2040_log_w("Imax value has changed enough to interrupt. IMAX detected, ");
+
+        if (flags & CHG_MASK)
+            rp2040_log_w("Fast charging allowed. CHG detected, ");
+
+        if (flags & SOC1_MASK)
+            rp2040_log_w("SOC1 reached.");
+
+        if (flags & SOCF_MASK)
+            rp2040_log_w("SOCF Set Percent reached. SOCF detected, ");
+
+        if (flags & DSG_MASK)
+            rp2040_log_w("Discharging detected. DSG detected, ");
+
+        rp2040_log_w("\n");
+    } else {
+        rp2040_log_d("Tags: ");
+        rp2040_log_d("No SystemStat errors detected");
+        rp2040_log_d("\n");
     }
-    if (flags & BATLOW_MASK){
-        rp2040_log("Low battery voltage condition BATLOW detected, ");
-        error = true;
-    }
-    if (flags & CHG_INH_MASK){
-        rp2040_log("Temperature is < T1 Temp or > T4 Temp while charging is not active. CHG_INH detected, ");
-        error = true;
-    }
-    if (flags & FC_MASK){
-        rp2040_log("Charge termination reached and FC Set Percent = -1. Or SOC > FC Percent is not -1. FC detected, ");
-        error = true;
-    }
-    if (flags & CHG_SUS_MASK){
-        rp2040_log("Temp < T1 Temp or > T5 Temp while charging active. CHG_SUS detected, ");
-        error = true;
-    }
-    if (flags & IMAX_MASK){
-        rp2040_log("Imax value has changed enough to interrupt. IMAX detected, ");
-        error = true;
-    }
-    if (flags & CHG_MASK){
-        rp2040_log("Fast charging allowed. CHG detected, ");
-        error = true;
-    }
-    if (flags & SOC1_MASK){
-        rp2040_log("SOC1 reached.");
-        error = true;
-    }
-    if (flags & SOCF_MASK){  
-        rp2040_log("SOCF Set Percent reached. SOCF detected, ");
-        error = true;
-    }
-    if (flags & DSG_MASK){
-        rp2040_log("Discharging detected. DSG detected, ");
-        error = true;
-    }
-    if (!error){
-        rp2040_log("No SystemStat errors detected");
-    }
-    rp2040_log("\n");
+
     return flags;
 }
 
@@ -476,17 +467,17 @@ static void bq27742_g1_control(uint16_t subcommand_code){
 
 static void bq27742_g1_set_shutdown(){
     bq27742_g1_control(0x0013); 
-    rp2040_log("Shutting Down bq27742_g1\n");
+    rp2040_log_d("Shutting Down bq27742_g1\n");
 }
 
 static void bq27742_g1_clear_shutdown(){
     bq27742_g1_control(0x0014); 
-    rp2040_log("Clearing Shutdown on bq27742_g1\n");
+    rp2040_log_d("Clearing Shutdown on bq27742_g1\n");
 }
 
 void bq27742_g1_fw_version_check(){
     bq27742_g1_control(0x0002); // Read FW Version
-    rp2040_log("FW Version: 0x%02x%02x\n", return_buf[1], return_buf[0]);
+    rp2040_log_i("FW Version: 0x%02x%02x\n", return_buf[1], return_buf[0]);
 }
 
 void bq27742_g1_shutdown(){

@@ -68,7 +68,7 @@ void get_block() {
     	    	    buffer_index++;
     	        }
     	    }else {
-    	        rp2040_log("Timeout while reading packet. Resetting state.\n");
+                rp2040_log_w("Timeout while reading packet. Resetting state.\n");
                 reset_packet_and_send_nack(&start_idx, &end_idx, &buffer_index);
                 return;
 	    }
@@ -87,12 +87,12 @@ void get_block() {
                 buffer_index = 0;
                 // Reset the packet
                 memset(&incoming_packet_from_android, 0, sizeof(IncomingPacketFromAndroid)); } else {
-                rp2040_log("Received incomplete packet. Resetting state.\n");
+                rp2040_log_w("Received incomplete packet. Resetting state.\n");
                 reset_packet_and_send_nack(&start_idx, &end_idx, &buffer_index);
                 return;
             }
         }else{
-            rp2040_log("Received packet with no end marker. Resetting state.\n");
+            rp2040_log_w("Received packet with no end marker. Resetting state.\n");
             reset_packet_and_send_nack(&start_idx, &end_idx, &buffer_index);
             return;
         }

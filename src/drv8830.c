@@ -76,7 +76,7 @@ int32_t drv8830_fault_handler(int32_t gpio){
     }
 
     if (addr == 0){
-	rp2040_log("Error: invalid motor fault\n");
+	rp2040_log_w("Error: invalid motor fault\n");
 	return -1;
     }else{
         i2c_write_error_handling(i2c, addr, &reg, 1, true);
@@ -116,7 +116,7 @@ int32_t drv8830_fault_handler(int32_t gpio){
 }
 
 void drv8830_init(uint gpio_fault1, uint gpio_fault2) {
-    rp2040_log("DRV8830 init\n");
+    rp2040_log_i("DRV8830 init\n");
     _gpio_fault1 = gpio_fault1;
     _gpio_fault2 = gpio_fault2;
     gpio_init(gpio_fault1);
@@ -133,7 +133,7 @@ void drv8830_init(uint gpio_fault1, uint gpio_fault2) {
 
     set_voltage(MOTOR_LEFT, 0);
     set_voltage(MOTOR_RIGHT, 0);
-    rp2040_log("DRV8830 init complete\n");
+    rp2040_log_i("DRV8830 init complete\n");
 }
 
 /*
@@ -222,36 +222,36 @@ static void drv8830_clear_faults(){
         i2c_read_error_handling(i2c, addr[i], &fault_value, 1, false);
 	// If the first bit is not 0, then the fault has not been cleared.
         if ((fault_value & 1) != 0){
-            rp2040_log("ERROR: Motor %d cannot clear faults. Exiting.\n", i);
+            rp2040_log_e("ERROR: Motor %d cannot clear faults. Exiting.\n", i);
             assert(false);
         }
     }
 }
 
 void test_drv8830_get_faults(){
-    rp2040_log("test_drv8830_get_faults starting...\n");
+    rp2040_log_i("test_drv8830_get_faults starting...\n");
     // This already does what a test would otherwise do. 
     drv8830_clear_faults();
-    rp2040_log("test_drv8830_get_faults: PASSED.\n");
+    rp2040_log_i("test_drv8830_get_faults: PASSED.\n");
 }
 
 void test_drv8830_interrupt(){
-    rp2040_log("test_drv8830_interrupt starting...\n");
+    rp2040_log_i("test_drv8830_interrupt starting...\n");
     test_drv8830_started = true;
-    rp2040_log("test_drv8830_interrupt: prior to driving low GPIO%d. Current Value:%d\n", _gpio_fault1, gpio_get(_gpio_fault1));
+    rp2040_log_i("test_drv8830_interrupt: prior to driving low GPIO%d. Current Value:%d\n", _gpio_fault1, gpio_get(_gpio_fault1));
     gpio_set_dir(_gpio_fault1, GPIO_OUT);
     if (gpio_get(_gpio_fault1) != 0){
-	rp2040_log("ERROR: test_drv8830_interrupt: GPIO%d was not driven low. Current Value:%d\n", _gpio_fault1, gpio_get(_gpio_fault1));
+	rp2040_log_e("ERROR: test_drv8830_interrupt: GPIO%d was not driven low. Current Value:%d\n", _gpio_fault1, gpio_get(_gpio_fault1));
 	assert(false);
     }
-    rp2040_log("test_drv8830_interrupt: after driving low GPIO%d. Current Value:%d\n", _gpio_fault1, gpio_get(_gpio_fault1));
+    rp2040_log_i("test_drv8830_interrupt: after driving low GPIO%d. Current Value:%d\n", _gpio_fault1, gpio_get(_gpio_fault1));
     uint32_t i = 0;
     while (!test_drv8830_completed){
         sleep_ms(10);
 	tight_loop_contents();
 	i++;
 	if (i > 1000){
-	    rp2040_log("ERROR: test_drv8830_interrupt timed out\n");
+	    rp2040_log_e("ERROR: test_drv8830_interrupt timed out\n");
 	    assert(false);
 	}
     }
@@ -259,7 +259,7 @@ void test_drv8830_interrupt(){
     gpio_pull_up(_gpio_fault1);
     test_drv8830_started = false;
     test_drv8830_completed = false;
-    rp2040_log("test_drv8830_interrupt: Encoder 1 PASSED after %" PRIu32 " milliseconds.\n", i*10);
+    rp2040_log_i("test_drv8830_interrupt: Encoder 1 PASSED after %" PRIu32 " milliseconds.\n", i*10);
     test_drv8830_started = true;
     gpio_set_dir(_gpio_fault2, GPIO_OUT);
     while (!test_drv8830_completed){
@@ -267,14 +267,14 @@ void test_drv8830_interrupt(){
 	tight_loop_contents();
 	i++;
 	if (i > 1000){
-	    rp2040_log("ERROR: test_drv8830_interrupt timed out\n");
+	    rp2040_log_e("ERROR: test_drv8830_interrupt timed out\n");
 	    assert(false);
 	}
     }
     gpio_set_dir(_gpio_fault2, GPIO_IN);
     gpio_pull_up(_gpio_fault2);
     test_drv8830_started = false;
-    rp2040_log("test_drv8830_interrupt: Encoder 2 PASSED after %" PRIu32 " milliseconds.\n", i*10);
+    rp2040_log_i("test_drv8830_interrupt: Encoder 2 PASSED after %" PRIu32 " milliseconds.\n", i*10);
 }
 
 static int32_t drv8830_test_response(){
