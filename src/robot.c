@@ -222,6 +222,9 @@ void on_start(){
     #ifndef BOARD_PICO
     bq27742_g1_init();
     bq27742_g1_fw_version_check();
+    #ifdef BQ27742_TEMP_TEST
+    bq27742_g1_temp_test_run();
+    #endif
     // Be sure to do this last
     sn74ahc125rgyr_on_end_of_start(SN74AHC125RGYR_GPIO1);
     sn74ahc125rgyr_on_end_of_start(SN74AHC125RGYR_GPIO2);

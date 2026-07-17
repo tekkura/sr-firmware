@@ -19,6 +19,7 @@ set(DRV8830_SCOPE_TEST_CONTROL "0x7A" CACHE STRING "DRV8830 scope test forward c
 set(DRV8830_SCOPE_TEST_DWELL_MS "750" CACHE STRING "DRV8830 scope test motor-on dwell in ms")
 set(DRV8830_SCOPE_TEST_OFF_MS "250" CACHE STRING "DRV8830 scope test motor-off dwell in ms")
 set(DRV8830_SCOPE_TEST_REPEAT "10" CACHE STRING "DRV8830 scope test repeat count")
+set(BQ27742_TEMP_TEST "0" CACHE STRING "Enable BQ27742 temperature diagnostic logs")
 
 # Set build type if not specified
 if(NOT CMAKE_BUILD_TYPE)
@@ -99,6 +100,10 @@ if(DRV8830_SCOPE_TEST)
         DRV8830_SCOPE_TEST_OFF_MS=${DRV8830_SCOPE_TEST_OFF_MS}
         DRV8830_SCOPE_TEST_REPEAT=${DRV8830_SCOPE_TEST_REPEAT}
     )
+endif()
+
+if(BQ27742_TEMP_TEST)
+    target_compile_definitions(robot PUBLIC BQ27742_TEMP_TEST=1)
 endif()
 
 # Add the standard library to the build

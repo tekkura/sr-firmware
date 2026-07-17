@@ -45,5 +45,8 @@ uint8_t bq27742_g1_get_soh();
 uint16_t bq27742_g1_get_flags();
 void bq27742_g1_shutdown();
 void bq27742_g1_fw_version_check();
+#ifdef BQ27742_TEMP_TEST
+void bq27742_g1_temp_test_run();
+#endif
 
 #endif
