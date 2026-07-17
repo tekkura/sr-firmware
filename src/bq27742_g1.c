@@ -14,6 +14,24 @@ static uint16_t temperature = 0;
 static uint32_t soh = 0;
 static void bq27742_g1_clear_shutdown();
 
+#ifdef BQ27742_TEMP_TEST
+static uint16_t bq27742_g1_read_word(uint8_t command, uint8_t *low_byte, uint8_t *high_byte){
+    memset(send_buf, 0, sizeof send_buf);
+    memset(return_buf, 0, sizeof return_buf);
+    send_buf[0] = command;
+    i2c_write_error_handling(i2c0, BQ27742_G1_ADDR, send_buf, 1, true);
+    i2c_read_error_handling(i2c0, BQ27742_G1_ADDR, return_buf, 2, false);
+
+    *low_byte = return_buf[0];
+    *high_byte = return_buf[1];
+    return (return_buf[1] << 8) | return_buf[0];
+}
+
+static int16_t bq27742_g1_kelvin10_to_celsius10(uint16_t raw_kelvin10){
+    return (int16_t)raw_kelvin10 - 2732;
+}
+#endif
+
 uint16_t bq27742_g1_get_voltage(){
     memset(return_buf, 0, sizeof return_buf);
     memset(&voltage, 0, sizeof(voltage));
@@ -86,7 +104,7 @@ uint16_t bq27742_g1_get_temp(){
     float temperature_ = (float)((return_buf[1] << 8) | return_buf[0]);
     temperature_ = (temperature_ - 2731.5);
     temperature_ = temperature_ / 10.0;
-    temperature = (uint16_t)temperature;
+    temperature = (uint16_t)temperature_;
     rp2040_log("Temperature: %d\n", (int)temperature);
     return temperature; 
 }
@@ -222,6 +240,51 @@ void bq27742_g1_fw_version_check(){
     bq27742_g1_control(0x0002); // Read FW Version
     rp2040_log("FW Version: 0x%02x%02x\n", return_buf[1], return_buf[0]);
 }
+
+#ifdef BQ27742_TEMP_TEST
+void bq27742_g1_temp_test_run(){
+    uint8_t selected_low = 0;
+    uint8_t selected_high = 0;
+    uint8_t internal_low = 0;
+    uint8_t internal_high = 0;
+
+    rp2040_log("BQ27742_TEMP_TEST START\n");
+
+    uint16_t selected_raw = bq27742_g1_read_word(0x06, &selected_low, &selected_high);
+    int16_t selected_c_x10 = bq27742_g1_kelvin10_to_celsius10(selected_raw);
+    rp2040_log(
+        "BQ27742_TEMP_TEST selected_temp raw=0x%04x lsb=0x%02x msb=0x%02x c_x10=%d\n",
+        selected_raw,
+        selected_low,
+        selected_high,
+        selected_c_x10
+    );
+
+    uint16_t internal_raw = bq27742_g1_read_word(0x28, &internal_low, &internal_high);
+    int16_t internal_c_x10 = bq27742_g1_kelvin10_to_celsius10(internal_raw);
+    rp2040_log(
+        "BQ27742_TEMP_TEST internal_temp raw=0x%04x lsb=0x%02x msb=0x%02x c_x10=%d\n",
+        internal_raw,
+        internal_low,
+        internal_high,
+        internal_c_x10
+    );
+
+    uint16_t voltage_mv = bq27742_g1_get_voltage();
+    uint8_t safety_status = bq27742_g1_get_safety_stats();
+    uint16_t flags = bq27742_g1_get_flags();
+    uint16_t api_temp_c = bq27742_g1_get_temp();
+    rp2040_log(
+        "BQ27742_TEMP_TEST api_temp_c=%u voltage_mv=%u safety=0x%02x flags=0x%04x\n",
+        api_temp_c,
+        voltage_mv,
+        safety_status,
+        flags
+    );
+
+    rp2040_log("BQ27742_TEMP_TEST END\n");
+}
+#endif
 
 void bq27742_g1_shutdown(){
     bq27742_g1_set_shutdown();

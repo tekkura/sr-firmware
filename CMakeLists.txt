@@ -14,6 +14,7 @@ set(CMAKE_COLOR_MAKEFILE ON)
 # Build options
 option(USE_DOCKER "Build using Docker container" ON)
 option(USE_LOCAL "Build locally instead of Docker" OFF)
+set(BQ27742_TEMP_TEST "0" CACHE STRING "Enable BQ27742 temperature diagnostic logs")
 
 # Set build type if not specified
 if(NOT CMAKE_BUILD_TYPE)
@@ -84,6 +85,10 @@ pico_enable_stdio_usb(robot 1)
 
 if(LOGGER STREQUAL "UART")
     target_compile_definitions(robot PUBLIC LOGGER_UART=1)
+endif()
+
+if(BQ27742_TEMP_TEST)
+    target_compile_definitions(robot PUBLIC BQ27742_TEMP_TEST=1)
 endif()
 
 # Add the standard library to the build
