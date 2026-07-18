@@ -4,6 +4,7 @@
 #include "ncp3901.h"
 #include "hardware/adc.h"
 #include "robot.h"
+#include <stdint.h>
 #include <inttypes.h>
 #include "custom_printf.h"
 
@@ -15,6 +16,18 @@ static int8_t _gpio_otg;
 static bool test_ncp3901_started = false;
 static bool test_ncp3901_completed = false;
 static bool wireless_charger_attached = false;
+
+#ifdef GPIO26_ADC_TEST
+#define GPIO26_ADC_TEST_SAMPLES 64
+#define GPIO26_ADC_TEST_DELAY_MS 20
+#define GPIO26_ADC_TEST_LOW_RAW_THRESHOLD 32
+#define GPIO26_ADC_TEST_ADC_REF_MV 3300
+#define GPIO26_ADC_TEST_ADC_MAX_RAW 4095
+
+static uint32_t gpio26_adc_raw_to_mv(uint16_t raw){
+    return ((uint32_t)raw * GPIO26_ADC_TEST_ADC_REF_MV) / GPIO26_ADC_TEST_ADC_MAX_RAW;
+}
+#endif
 
 // on wireless power available
 void ncp3901_on_wireless_charger_interrupt(uint gpio, uint32_t event_mask)
@@ -90,6 +103,52 @@ uint16_t ncp3901_adc0()
     // rp2040_log("Raw value: 0x%03x, voltage: %f V\n", result, result * conversion_factor);
 }
 
+#ifdef GPIO26_ADC_TEST
+void ncp3901_gpio26_adc_test_run(){
+    uint16_t min_raw = UINT16_MAX;
+    uint16_t max_raw = 0;
+    uint64_t sum_raw = 0;
+
+    rp2040_log("GPIO26_ADC_TEST START samples=%d delay_ms=%d adc_ref_mv=%d adc_max_raw=%d\n",
+        GPIO26_ADC_TEST_SAMPLES,
+        GPIO26_ADC_TEST_DELAY_MS,
+        GPIO26_ADC_TEST_ADC_REF_MV,
+        GPIO26_ADC_TEST_ADC_MAX_RAW);
+    rp2040_log("GPIO26_ADC_TEST note=ADC reports GPIO26 pin voltage only; external USB voltage may be divided before the ADC pin\n");
+
+    for (uint16_t i = 0; i < GPIO26_ADC_TEST_SAMPLES; i++){
+        uint16_t raw = ncp3901_adc0();
+        uint32_t mv = gpio26_adc_raw_to_mv(raw);
+        if (raw < min_raw){
+            min_raw = raw;
+        }
+        if (raw > max_raw){
+            max_raw = raw;
+        }
+        sum_raw += raw;
+        rp2040_log("GPIO26_ADC_TEST sample=%u raw=%u adc_mv=%u\n", i, raw, mv);
+        sleep_ms(GPIO26_ADC_TEST_DELAY_MS);
+    }
+
+    uint16_t avg_raw = (uint16_t)(sum_raw / GPIO26_ADC_TEST_SAMPLES);
+    uint32_t avg_mv = gpio26_adc_raw_to_mv(avg_raw);
+    rp2040_log("GPIO26_ADC_TEST summary min_raw=%u max_raw=%u avg_raw=%u avg_adc_mv=%u\n",
+        min_raw,
+        max_raw,
+        avg_raw,
+        avg_mv);
+
+    if (max_raw <= GPIO26_ADC_TEST_LOW_RAW_THRESHOLD){
+        rp2040_log("GPIO26_ADC_TEST result=LOW_RAW warning=max_raw_at_or_below_%d\n",
+            GPIO26_ADC_TEST_LOW_RAW_THRESHOLD);
+    } else {
+        rp2040_log("GPIO26_ADC_TEST result=ADC_ACTIVE\n");
+    }
+
+    rp2040_log("GPIO26_ADC_TEST END\n");
+}
+#endif
+
 void ncp3901_shutdown(){
 }
 
@@ -145,4 +204,3 @@ static int32_t ncp3901_test_response(){
     test_ncp3901_completed = true;
     return 0;
 }
-

@@ -210,6 +210,9 @@ void on_start(){
     turn_on_leds();
     STWLC38JRM_init(WIRELESS_CHG_EN, WIRELESS_CHG_VRECT);
     ncp3901_init(GPIO_WIRELESS_AVAILABLE, GPIO_OTG);
+#ifdef GPIO26_ADC_TEST
+    ncp3901_gpio26_adc_test_run();
+#endif
     max77976_init(BATTERY_CHARGER_INTERRUPT_PIN, &call_queue, &results_queue);
     sn74ahc125rgyr_init(SN74AHC125RGYR_GPIO1);
     sn74ahc125rgyr_init(SN74AHC125RGYR_GPIO2);

@@ -5,6 +5,7 @@ JOBS ?= $(shell nproc)
 DOCKER_DEBUG_CONTAINER := smartphone-robot-debug
 ARCH ?= amd64
 LOGGER ?= USB
+GPIO26_ADC_TEST ?= 0
 
 #  MILESTONE 1: BOARD SELECTION & VALIDATION 
 BOARD ?= customPCB
@@ -20,6 +21,9 @@ ifeq ($(BOARD),pico)
 else
     BOARD_FLAGS = 
 endif
+
+GPIO26_ADC_FLAGS = \
+	-DGPIO26_ADC_TEST=$(GPIO26_ADC_TEST)
 
 # Variable for the RTT Test to access the serial port
 DOCKER_USB_DEVICE ?= /dev/ttyACM0
@@ -63,6 +67,7 @@ help:
 	@echo "  make docker      - Build or rebuild the Docker image (must be in project root)"
 	@echo "  make shell       - Start an interactive shell in the Docker container"
 	@echo "  make benchmark   - Build and run host benchmark (in Docker)"
+	@echo "  make gpio26-adc-test-firmware - Build GPIO26 ADC diagnostic firmware"
 	@echo "  make test TEST=rtt BOARD=[pico|customPCB] - Run full RTT benchmark flow"
 	@echo ""
 	@echo "Assumptions:"
@@ -74,13 +79,18 @@ help:
 	@echo "  JOBS=N                - Number of parallel build jobs (default: The number of processor cores)"
 	@echo "  ARCH=amd64|arm64        - Specify architecture for all make targets (default: amd64)"
 	@echo "  LOGGER=USB|UART         - Specify logger interface (default: USB)"
+	@echo "  GPIO26_ADC_TEST=0|1     - Enable GPIO26 ADC diagnostic logs (default: 0)"
 	@echo "  Example: make flash DOCKER_USB_DEVICE=/dev/ttyACM0"
 
 # Build firmware
 .PHONY: firmware
 firmware:
 	@echo "Building firmware in Docker with $(JOBS) jobs..."
-	$(DOCKER_RUN) bash -c "rm -rf build && mkdir build && cd build && cmake .. -DLOGGER=$(LOGGER) $(BOARD_FLAGS) && make -j$(JOBS)"
+	$(DOCKER_RUN) bash -c "rm -rf build && mkdir build && cd build && cmake .. -DLOGGER=$(LOGGER) $(BOARD_FLAGS) $(GPIO26_ADC_FLAGS) && make -j$(JOBS)"
+
+.PHONY: gpio26-adc-test-firmware
+gpio26-adc-test-firmware:
+	$(MAKE) firmware GPIO26_ADC_TEST=1 LOGGER=UART
 
 # Name for the persistent debug container
 DEBUG_CONTAINER := smartphone-robot-debug

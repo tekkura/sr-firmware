@@ -9,5 +9,8 @@ bool ncp3901_wireless_charger_attached();
 uint16_t ncp3901_adc0();
 void ncp3901_shutdown();
 void test_ncp3901_interrupt();
+#ifdef GPIO26_ADC_TEST
+void ncp3901_gpio26_adc_test_run();
+#endif
 
 #endif
