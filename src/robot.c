@@ -62,6 +62,7 @@ void get_encoder_counts(RP2040_STATE* rp2040_state);
 void get_motor_faults(RP2040_STATE* state);
 void get_charger_state(RP2040_STATE* state);
 static void telemetry_cache_init(void);
+static void telemetry_cache_hydrate(void);
 static void telemetry_cache_copy_to_state(RP2040_STATE *state);
 static void telemetry_cache_run_due_step(void);
 void turn_on_leds();
@@ -231,6 +232,21 @@ static void telemetry_cache_init(void)
     absolute_time_t now = get_absolute_time();
     telemetry_cache.next_fast_sample_at = now;
     telemetry_cache.next_slow_sample_at = now;
+    telemetry_cache_hydrate();
+}
+
+static void telemetry_cache_hydrate(void)
+{
+#ifndef BOARD_PICO
+    get_charger_state(&telemetry_cache.state);
+    get_battery_state(&telemetry_cache.state);
+    get_motor_faults(&telemetry_cache.state);
+
+    telemetry_cache.fast_step = TELEMETRY_FAST_SAMPLE_WIRELESS_ATTACHED;
+    telemetry_cache.slow_step = TELEMETRY_SLOW_SAMPLE_BATTERY_VOLTAGE;
+    telemetry_cache.next_fast_sample_at = make_timeout_time_ms(TELEMETRY_FAST_SAMPLE_INTERVAL_MS);
+    telemetry_cache.next_slow_sample_at = make_timeout_time_ms(TELEMETRY_SLOW_SAMPLE_INTERVAL_MS);
+#endif
 }
 
 static void telemetry_cache_copy_to_state(RP2040_STATE *state)
@@ -337,9 +353,9 @@ int main(){
 	    on_shutdown();
 	    break;
 	}else{
+            telemetry_cache_run_due_step();
 	    // This sleep or some other time consuming function must occur else can't reset from gdb as thread will be stuck in tight_loop_contents()
             if (!handled_packet) {
-                telemetry_cache_run_due_step();
                 sleep_ms(1);
             }
 	    tight_loop_contents();
