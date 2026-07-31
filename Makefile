@@ -42,7 +42,7 @@ else
   DOCKER_IMAGE_TAG := $(DOCKER_IMAGE):$(DOCKER_TAG)-$(ARCH)
 endif
 
-LOG_LEVEL ?= INFO
+LOG_LEVEL ?= WARNING
 
 ifneq ($(LOG_LEVEL), DEBUG)
 ifneq ($(LOG_LEVEL), INFO)
@@ -100,6 +100,7 @@ help:
 	@echo "  JOBS=N                - Number of parallel build jobs (default: The number of processor cores)"
 	@echo "  ARCH=amd64|arm64        - Specify architecture for all make targets (default: amd64)"
 	@echo "  LOGGER=USB|UART         - Specify logger interface (default: USB)"
+	@echo "  LOG_LEVEL=DEBUG|INFO|WARNING|ERROR|NONE     - Specify desired logging level (default: WARNING)"
 	@echo "  DRV8830_SCOPE_TEST=0|1 - Enable DRV8830 back/forth scope test (default: 0)"
 	@echo "  Example: make flash DOCKER_USB_DEVICE=/dev/ttyACM0"
 
@@ -107,7 +108,7 @@ help:
 .PHONY: firmware
 firmware:
 	@echo "Building firmware in Docker with $(JOBS) jobs..."
-	$(DOCKER_RUN) bash -c "rm -rf build && mkdir build && cd build && cmake .. -DLOGGER=$(LOGGER) $(BOARD_FLAGS) $(DRV8830_SCOPE_FLAGS) && make -j$(JOBS)"
+	$(DOCKER_RUN) bash -c "rm -rf build && mkdir build && cd build && cmake .. -DLOGGER=$(LOGGER) -DLOG_LEVEL=$(LOG_LEVEL) $(BOARD_FLAGS) $(DRV8830_SCOPE_FLAGS) && make -j$(JOBS)"
 
 # Name for the persistent debug container
 DEBUG_CONTAINER := smartphone-robot-debug

@@ -264,7 +264,7 @@ void on_start(){
     read_reg(0xD);
     #endif
 
-    rp2040_log("on_start complete\n");
+    rp2040_log_i("on_start complete\n");
 #ifndef BOARD_PICO
 #ifdef DRV8830_SCOPE_TEST
     drv8830_scope_test_run();

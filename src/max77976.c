@@ -255,13 +255,13 @@ uint32_t max77976_get_chg_details(){
     rp2040_log_d("CHG_DETAILS_00_CHGIN_DTLS: ");
     switch (CHGIN_DTLS){
         case 0b00:
-	    rp2040_log_d("VBUS is invalid. VCHGIN rising: VCHGIN < VCHGIN_UVLO. VCHGIN falling: VCHGIN < VCHGIN_REG (AICL)");
+	    rp2040_log_w("VBUS is invalid. VCHGIN rising: VCHGIN < VCHGIN_UVLO. VCHGIN falling: VCHGIN < VCHGIN_REG (AICL)");
 	    break;
         case 0b01:
-	    rp2040_log_d("VBUS is invalid. VCHGIN < VBATT + VCHGIN2SYS and VCHGIN > VCHGIN_UVLO");
+	    rp2040_log_w("VBUS is invalid. VCHGIN < VBATT + VCHGIN2SYS and VCHGIN > VCHGIN_UVLO");
 	    break;
         case 0b10:
-	    rp2040_log_d("VBUS is invalid. VCHGIN > VCHGIN_OVLO");
+	    rp2040_log_w("VBUS is invalid. VCHGIN > VCHGIN_OVLO");
 	    break;
         case 0b11:
 	    rp2040_log_d("VBUS is valid. VCHGIN > VCHGIN_UVLO and VCHGIN > VBATT + VCHGIN2SYS and VCHGIN < VCHGIN_OVLO");
@@ -281,7 +281,7 @@ uint32_t max77976_get_chg_details(){
 	    rp2040_log_d("The junction temperature is less than the threshold set by REGTEMP and the full charge current limit is available");
 	    break;
 	case 0b1:
-	    rp2040_log_d("The junction temperature is greater than the threshold set by REGTEMP and the charge current limit may be folding back to reduce power dissipation.");
+	    rp2040_log_w("The junction temperature is greater than the threshold set by REGTEMP and the charge current limit may be folding back to reduce power dissipation.");
 	    break;
     }
     rp2040_log_d("\n");
@@ -289,22 +289,22 @@ uint32_t max77976_get_chg_details(){
     rp2040_log_d("CHG_DETAILS_01_BAT_DTLS: ");
     switch (BAT_DTLS){
         case 0b000:
-	    rp2040_log_d("Battery Removal");
+	    rp2040_log_w("Battery Removal");
 	    break;
         case 0b001:
 	    rp2040_log_d("Battery Prequalification Voltage");
 	    break;
         case 0b010:
-	    rp2040_log_d("Battery Timer Fault");
+	    rp2040_log_w("Battery Timer Fault");
 	    break;
         case 0b011:
 	    rp2040_log_d("Battery Regular Voltage");
 	    break;
         case 0b100:
-	    rp2040_log_d("Battery Low Voltage");
+	    rp2040_log_w("Battery Low Voltage");
 	    break;
         case 0b101:
-	    rp2040_log_d("Battery Overvoltage");
+	    rp2040_log_w("Battery Overvoltage");
 	    break;
         case 0b110:
 	    rp2040_log_d("Reserved");
@@ -335,31 +335,31 @@ uint32_t max77976_get_chg_details(){
 	    rp2040_log_d("Reserved");
 	    break;
         case 0x06:
-	    rp2040_log_d("Charger is in timer-fault mode.");
+	    rp2040_log_w("Charger is in timer-fault mode.");
 	    break;
         case 0x07:
-	    rp2040_log_d("Charger is suspended because QBATT is disabled");
+	    rp2040_log_w("Charger is suspended because QBATT is disabled");
 	    break;
         case 0x08:
-	    rp2040_log_d("Charger is off, charger input invalid and/or charger is disabled.");
+	    rp2040_log_w("Charger is off, charger input invalid and/or charger is disabled.");
 	    break;
         case 0x09:
 	    rp2040_log_d("Reserved");
 	    break;
         case 0x0A:
-	    rp2040_log_d("Charger is off and the junction temperature is > TSHDN.");
+	    rp2040_log_w("Charger is off and the junction temperature is > TSHDN.");
 	    break;
         case 0x0B:
-	    rp2040_log_d("Charger is off because the watchdog timer expired");
+	    rp2040_log_w("Charger is off because the watchdog timer expired");
 	    break;
         case 0x0C:
-	    rp2040_log_d("Charger is suspended or charge current or voltage is reduced based on JEITA control.");
+	    rp2040_log_w("Charger is suspended or charge current or voltage is reduced based on JEITA control.");
 	    break;
         case 0x0D:
-	    rp2040_log_d("Charger is suspended because battery removal is detected on THM pin.");
+	    rp2040_log_w("Charger is suspended because battery removal is detected on THM pin.");
 	    break;
         case 0x0E:
-	    rp2040_log_d("Charger is suspended because SUSPEND pin is high.");
+	    rp2040_log_w("Charger is suspended because SUSPEND pin is high.");
 	    break;
         case 0x0F:
 	    rp2040_log_d("Reserved");

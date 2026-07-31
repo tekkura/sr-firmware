@@ -19,16 +19,10 @@
 static CircularBufferLog log_buffer;
 auto_init_mutex(rp2040_log_buffer_mutex);
 
-static bool rp2040_log_buffer_is_empty() {
-    return log_buffer.count == 0;
-}
-
 // Initialize the circular buffer
 void rp2040_log_init() {
-    memset(&log_buffer, 0, sizeof(log_buffer));
     log_buffer.head = 0; 
     log_buffer.tail = 0;
-    log_buffer.count = 0;
     
     #ifdef LOGGER_UART
     // Initialize dedicated UART for logging (separate from stdio)
@@ -47,18 +41,18 @@ void rp2040_log_release_lock() {
 }
 
 
-static void rp2040_log_v(int level, const char* format, va_list args) {
+void rp2040_log(int level, const char* format, ...) {
     if (level < LOG_LEVEL) return;
 
     rp2040_log_acquire_lock(); // Acquire the lock
+    va_list args;
 
     #ifdef LOGGER_UART
     // For UART mode, log directly to UART hardware (not stdio)
     char buffer[256];
-    va_list uart_args;
-    va_copy(uart_args, args);
-    vsnprintf(buffer, sizeof(buffer), format, uart_args);
-    va_end(uart_args);
+    va_start(args, format);
+    vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
     
     // Send directly to UART0 on GPIO16/17
     uart_puts(LOG_UART, buffer);
@@ -66,11 +60,10 @@ static void rp2040_log_v(int level, const char* format, va_list args) {
     return;
     #endif
 
+    va_start(args, format);
     // Calculate the number of characters required
-    va_list size_args;
-    va_copy(size_args, args);
-    int len = vsnprintf(NULL, 0, format, size_args) + 1; //include the /n
-    va_end(size_args);
+    int len = vsnprintf(NULL, 0, format, args) + 1; //include the /n
+    va_end(args);
 
     // truncate the message if it is too long else expect chaos when overwriting unknown areas of memory
     if (len > LOG_BUFFER_CHAR_LIMIT) {
@@ -79,67 +72,35 @@ static void rp2040_log_v(int level, const char* format, va_list args) {
 
 
     // Format the message and copy it to the buffer, handling wrapping
-    va_list format_args;
-    va_copy(format_args, args);
-    vsnprintf(log_buffer.log_array[log_buffer.tail], len, format, format_args);
-    va_end(format_args);
+    va_start(args, format); // Restart the argument list
+    vsnprintf(log_buffer.log_array[log_buffer.tail], len, format, args);
+    va_end(args);
 
     log_buffer.log_array_line_size[log_buffer.tail] = len; // store the size of the line -2 for removing \n and null terminator
-    if (log_buffer.count == LOG_BUFFER_LINE_COUNT) {
+    // update head
+    if (log_buffer.tail == log_buffer.head) {
         log_buffer.head = (log_buffer.head + 1) % LOG_BUFFER_LINE_COUNT;
-    } else {
-        log_buffer.count++;
     }
     log_buffer.tail = (log_buffer.tail + 1) % LOG_BUFFER_LINE_COUNT; // Update tail correctly
 
     rp2040_log_release_lock(); // Release the lock
 }
 
-void rp2040_log(int level, const char* format, ...) {
-    va_list args;
-    va_start(args, format);
-    rp2040_log_v(level, format, args);
-    va_end(args);
-}
-
 // Function to retrieve the total number of bytes within the log_array
 uint16_t rp2040_get_byte_count() {
-   // Sum only populated entries within the live ring segment.
-   uint16_t byte_count = 0;
-   if (rp2040_log_buffer_is_empty()) {
-       return 0;
+   // sum up the values witin log_array_line_size
+   uint16_t byte_count = 0; 
+   for (int i = 0; i < LOG_BUFFER_LINE_COUNT; i++) {
+	   byte_count += log_buffer.log_array_line_size[i] - 1;
    }
-
-   uint16_t index = log_buffer.head;
-   for (uint16_t i = 0; i < log_buffer.count; i++) {
-       uint16_t line_size = log_buffer.log_array_line_size[index];
-       if (line_size > 0) {
-           byte_count += line_size - 1;
-       }
-       index = (index + 1) % LOG_BUFFER_LINE_COUNT;
-   }
-
    return byte_count;
 }
 
 void rp2040_log_flush(){
-    if (rp2040_log_buffer_is_empty()) {
-        return;
+    // printf each line within the log_array starting at the head
+    for (int i = 0; i < LOG_BUFFER_LINE_COUNT; i++) {
+	// only print up to log_array_line_size
+	printf("%.*s", log_buffer.log_array_line_size[log_buffer.head], log_buffer.log_array[log_buffer.head]);
+	log_buffer.head = (log_buffer.head + 1) % LOG_BUFFER_LINE_COUNT; // Update head correctly
     }
-
-    // Print only populated entries within the live ring segment.
-    uint16_t index = log_buffer.head;
-    for (uint16_t i = 0; i < log_buffer.count; i++) {
-        uint16_t line_size = log_buffer.log_array_line_size[index];
-        if (line_size > 0) {
-            printf("%.*s", line_size, log_buffer.log_array[index]);
-        }
-        index = (index + 1) % LOG_BUFFER_LINE_COUNT;
-    }
-
-    // Drain the buffer so the next GET_LOG only reports new entries.
-    log_buffer.head = 0;
-    log_buffer.tail = 0;
-    log_buffer.count = 0;
 }
-

@@ -324,7 +324,7 @@ static int opcode_write(uint8_t *buf){
     // so you may send wrong data if you don't directly specify them for ALL registers. Note the defaults are NOT always 0x00,
     // so you should send all values everytime. What a pain...
     if (buf[0] != 0x21){
-	rp2040_log_w("ERROR: buffer should always start with the 0x21 register");
+	rp2040_log_e("ERROR: buffer should always start with the 0x21 register");
     }
 
     i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, buf, sizeof(send_buf), false);
@@ -384,7 +384,7 @@ void test_max77958_status_block_read_all(void)
         uint8_t val = max77958_read_register(regs[i].reg);
 
         if (val != regs[i].expected)
-            rp2040_log_w("test_max77958_status_block_read_all ERROR: %s expected 0b" BYTE_TO_BINARY_PATTERN ", got 0b" BYTE_TO_BINARY_PATTERN "\n",
+            rp2040_log_e("test_max77958_status_block_read_all ERROR: %s expected 0b" BYTE_TO_BINARY_PATTERN ", got 0b" BYTE_TO_BINARY_PATTERN "\n",
                        regs[i].name, BYTE_TO_BINARY(regs[i].expected), BYTE_TO_BINARY(val));
         else
             rp2040_log_i("test_max77958_status_block_read_all PASSED: %s matches reset value 0b" BYTE_TO_BINARY_PATTERN "\n",
@@ -402,10 +402,10 @@ void test_max77958_get_id(){
     i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, send_buf, 1, true);
     i2c_read_error_handling(i2c0, MAX77958_SLAVE_P1, return_buf, 2, false);
     if (return_buf[0] != 0x58){
-	rp2040_log_w("test_max77958_get_id ERROR: DEVICE_ID should be 0x58");
+	rp2040_log_e("test_max77958_get_id ERROR: DEVICE_ID should be 0x58");
     }
     if (return_buf[1] != 0x02){
-	rp2040_log_w("test_max77958_get_id ERROR: DEVICE_REV should be 0x02");
+	rp2040_log_e("test_max77958_get_id ERROR: DEVICE_REV should be 0x02");
     }
     rp2040_log_i("test_max77958_get_id PASSED: DEVICE_ID = %x\n", return_buf[0]);
     rp2040_log_i("test_max77958_get_id PASSED: DEVICE_REV = %x\n", return_buf[1]);
@@ -428,14 +428,14 @@ void test_max77958_bc_ctrl1_read(){
 	sleep_ms(100);
 	i++;
 	if (i > 10){
-	    rp2040_log_w("test_max77958_bc_ctrl1_read ERROR: Timed out waiting for GPIO to finish\n");
+	    rp2040_log_e("test_max77958_bc_ctrl1_read ERROR: Timed out waiting for GPIO to finish\n");
 	}
     }
     if (op_code_return_buf[0] != 0x01){
-	rp2040_log_w("test_max77958_bc_ctrl1_read ERROR: OPCODE should be 0x01");
+	rp2040_log_e("test_max77958_bc_ctrl1_read ERROR: OPCODE should be 0x01");
     }
     if (op_code_return_buf[1] != 0b10000001){
-        rp2040_log_w("test_max77958_bc_ctrl1_read ERROR: BC_CTRL1_CONFIG should be 0b10000001 instead it is 0b"
+        rp2040_log_e("test_max77958_bc_ctrl1_read ERROR: BC_CTRL1_CONFIG should be 0b10000001 instead it is 0b"
            BYTE_TO_BINARY_PATTERN "\n",
            BYTE_TO_BINARY(op_code_return_buf[1]));
     }else{
@@ -464,17 +464,17 @@ void test_max77958_bc_ctrl2_read(void)
     while (!opcodes_finished) {
         sleep_ms(100);
         if (++i > 10) {
-            rp2040_log_w("test_max77958_bc_ctrl2_read ERROR: Timed out waiting for response\n");
+            rp2040_log_e("test_max77958_bc_ctrl2_read ERROR: Timed out waiting for response\n");
         }
     }
 
     if (op_code_return_buf[0] != 0x03) {
-		rp2040_log_w("test_max77958_bc_ctrl2_read ERROR: OPCODE should be 0x03 (got 0x%02x)\n",
+		rp2040_log_e("test_max77958_bc_ctrl2_read ERROR: OPCODE should be 0x03 (got 0x%02x)\n",
 				   op_code_return_buf[0]);
 	}
 
     if (op_code_return_buf[1] != 0b00000001) {
-        rp2040_log_w("test_max77958_bc_ctrl2_read ERROR: OPCODE should be 0b00000001 got 0b"
+        rp2040_log_e("test_max77958_bc_ctrl2_read ERROR: OPCODE should be 0b00000001 got 0b"
 	   BYTE_TO_BINARY_PATTERN "\n",
 	   BYTE_TO_BINARY(op_code_return_buf[1]));
     }else{
@@ -504,17 +504,17 @@ void test_max77958_control1_read(void)
     while (!opcodes_finished) {
         sleep_ms(100);
         if (++i > 10) {
-            rp2040_log_w("test_max77958_control1_read ERROR: Timed out waiting for response\n");
+            rp2040_log_e("test_max77958_control1_read ERROR: Timed out waiting for response\n");
         }
     }
 
     if (op_code_return_buf[0] != 0x05) {
-        rp2040_log_w("test_max77958_control1_read ERROR: OPCODE should be 0x05 (got 0x%02x)\n",
+        rp2040_log_e("test_max77958_control1_read ERROR: OPCODE should be 0x05 (got 0x%02x)\n",
     			   op_code_return_buf[0]);
     }
 
     if (op_code_return_buf[1] != 0b00000000) {
-        rp2040_log_w("test_max77958_control1_read ERROR: OPCODE should be 0b00000000 (got 0b"
+        rp2040_log_e("test_max77958_control1_read ERROR: OPCODE should be 0b00000000 (got 0b"
 	   BYTE_TO_BINARY_PATTERN ")\n",
 	   BYTE_TO_BINARY(op_code_return_buf[1]));
     }else{
@@ -541,14 +541,14 @@ void test_max77958_cc_ctrl1_read(){
 	sleep_ms(100);
 	i++;
 	if (i > 10){
-	    rp2040_log_w("test_max77958_cc_ctrl1_read ERROR: Timed out waiting for GPIO to finish\n");
+	    rp2040_log_e("test_max77958_cc_ctrl1_read ERROR: Timed out waiting for GPIO to finish\n");
 	}
     }
     if (op_code_return_buf[0] != 0x0B){
-	rp2040_log_w("test_max77958_cc_ctrl1_read ERROR: OPCODE should be 0x0B");
+	rp2040_log_e("test_max77958_cc_ctrl1_read ERROR: OPCODE should be 0x0B");
     }
     if (op_code_return_buf[1] != 0b10000001){
-        rp2040_log_w("test_max77958_cc_ctrl1_read ERROR: CC_CTRL1_CONFIG should be 0b10000001 instead it is 0b"
+        rp2040_log_e("test_max77958_cc_ctrl1_read ERROR: CC_CTRL1_CONFIG should be 0b10000001 instead it is 0b"
            BYTE_TO_BINARY_PATTERN "\n",
            BYTE_TO_BINARY(op_code_return_buf[1]));
     }else{
@@ -578,17 +578,17 @@ void test_max77958_cc_ctrl4_read(void)
     while (!opcodes_finished) {
         sleep_ms(100);
         if (++i > 10) {
-            rp2040_log_w("test_max77958_cc_ctrl4_read ERROR: Timed out waiting for response\n");
+            rp2040_log_e("test_max77958_cc_ctrl4_read ERROR: Timed out waiting for response\n");
         }
     }
 
     if (op_code_return_buf[0] != 0x11) {
-        rp2040_log_w("test_max77958_cc_ctrl4_read ERROR: OPCODE should be 0x11 (got 0x%02x)\n",
+        rp2040_log_e("test_max77958_cc_ctrl4_read ERROR: OPCODE should be 0x11 (got 0x%02x)\n",
                    op_code_return_buf[0]);
     }
 
     if (op_code_return_buf[1] != 0b00000000) {
-		rp2040_log_w("test_max77958_cc_ctrl4_read ERROR: OPCODE should be 0b00000000 (got 0b"
+		rp2040_log_e("test_max77958_cc_ctrl4_read ERROR: OPCODE should be 0b00000000 (got 0b"
 				   BYTE_TO_BINARY_PATTERN ")\n",
 				   BYTE_TO_BINARY(op_code_return_buf[1]));
     }else{
@@ -617,31 +617,31 @@ void test_max77958_gpio_control_read(void)
     while (!opcodes_finished) {
         sleep_ms(100);
         if (++i > 10) {
-            rp2040_log_w("test_max77958_gpio_control_read ERROR: Timed out waiting for response\n");
+            rp2040_log_e("test_max77958_gpio_control_read ERROR: Timed out waiting for response\n");
         }
     }
 
     if (op_code_return_buf[0] != 0x23) {
-        rp2040_log_w("test_max77958_gpio_control_read ERROR: OPCODE should be 0x23 (got 0x%02x)\n",
+        rp2040_log_e("test_max77958_gpio_control_read ERROR: OPCODE should be 0x23 (got 0x%02x)\n",
                    op_code_return_buf[0]);
     }
 
     int error_count = 0;
 
     if (op_code_return_buf[1] != 0b00000000) {
-	rp2040_log_w("test_max77958_gpio_control_read ERROR: OPCODE should be 0b00000000 (got 0b"
+	rp2040_log_e("test_max77958_gpio_control_read ERROR: OPCODE should be 0b00000000 (got 0b"
 	   BYTE_TO_BINARY_PATTERN ")\n",
 	   BYTE_TO_BINARY(op_code_return_buf[1]));
 	error_count++;
     }
     if (op_code_return_buf[2] != 0b00000000) {
-	rp2040_log_w("test_max77958_gpio_control_read ERROR: OPCODE should be 0b00000000 (got 0b"
+	rp2040_log_e("test_max77958_gpio_control_read ERROR: OPCODE should be 0b00000000 (got 0b"
 	   BYTE_TO_BINARY_PATTERN ")\n",
 	   BYTE_TO_BINARY(op_code_return_buf[2]));
 	error_count++;
     }
     if (op_code_return_buf[3] != 0b00000000) {
-        rp2040_log_w("test_max77958_gpio_control_read ERROR: OPCODE should be 0b00000000 (got 0b"
+        rp2040_log_e("test_max77958_gpio_control_read ERROR: OPCODE should be 0b00000000 (got 0b"
     	   BYTE_TO_BINARY_PATTERN ")\n",
     	   BYTE_TO_BINARY(op_code_return_buf[3]));
 		error_count++;
@@ -677,20 +677,20 @@ void test_max77958_gpio0_gpio1_adc_read(void)
     while (!opcodes_finished) {
         sleep_ms(100);
         if (++i > 10) {
-            rp2040_log_w("test_max77958_gpio0_gpio1_adc_read ERROR: Timed out waiting for response\n");
+            rp2040_log_e("test_max77958_gpio0_gpio1_adc_read ERROR: Timed out waiting for response\n");
         }
     }
 
     if (op_code_return_buf[0] != 0x27) {
-        rp2040_log_w("test_max77958_gpio0_gpio1_adc_read ERROR: OPCODE should be 0x27 (got 0x%02x)\n",
+        rp2040_log_e("test_max77958_gpio0_gpio1_adc_read ERROR: OPCODE should be 0x27 (got 0x%02x)\n",
                    op_code_return_buf[0]);
     }
 
     if (op_code_return_buf[1] != 0b00000000 || op_code_return_buf[2] != 0b00000000) {
-	rp2040_log_w("test_max77958_gpio0_gpio1_adc_read ERROR: SBU1 should be 0b00000000 (got 0b"
+	rp2040_log_e("test_max77958_gpio0_gpio1_adc_read ERROR: SBU1 should be 0b00000000 (got 0b"
 	   BYTE_TO_BINARY_PATTERN ")\n",
 	   BYTE_TO_BINARY(op_code_return_buf[1]));
-	rp2040_log_w("test_max77958_gpio0_gpio1_adc_read ERROR: SBU2 should be 0b00000000 (got 0b"
+	rp2040_log_e("test_max77958_gpio0_gpio1_adc_read ERROR: SBU2 should be 0b00000000 (got 0b"
 	   BYTE_TO_BINARY_PATTERN ")\n",
 	   BYTE_TO_BINARY(op_code_return_buf[2]));
     }else{
@@ -729,11 +729,11 @@ void test_max77958_snk_pdo_request(void)
     while (!opcodes_finished) {
         sleep_ms(100);
         if (++i > 10) {
-            rp2040_log_w("test_max77958_snk_pdo_request ERROR: Timed out waiting for MTP\n");
+            rp2040_log_e("test_max77958_snk_pdo_request ERROR: Timed out waiting for MTP\n");
         }
     }
     if (op_code_return_buf[0] != 0x3E) {
-        rp2040_log_w("test_max77958_snk_pdo_request ERROR: OPCODE echo mismatch for MTP (got 0x%02x)\n",
+        rp2040_log_e("test_max77958_snk_pdo_request ERROR: OPCODE echo mismatch for MTP (got 0x%02x)\n",
                    op_code_return_buf[0]);
     }
 
@@ -755,11 +755,11 @@ void test_max77958_snk_pdo_request(void)
     while (!opcodes_finished) {
         sleep_ms(100);
         if (++i > 10) {
-            rp2040_log_w("test_max77958_snk_pdo_request ERROR: Timed out waiting for RAM\n");
+            rp2040_log_e("test_max77958_snk_pdo_request ERROR: Timed out waiting for RAM\n");
         }
     }
     if (op_code_return_buf[0] != 0x3E) {
-        rp2040_log_w("test_max77958_snk_pdo_request ERROR: OPCODE echo mismatch for RAM (got 0x%02x)\n",
+        rp2040_log_e("test_max77958_snk_pdo_request ERROR: OPCODE echo mismatch for RAM (got 0x%02x)\n",
                    op_code_return_buf[0]);
     }
 
@@ -795,17 +795,17 @@ void test_max77958_get_customer_config(){
 	sleep_ms(100);
 	i++;
 	if (i > 10){
-	    rp2040_log_w("test_max77958_get_customer_config ERROR: Timed out waiting for GPIO to finish\n");
+	    rp2040_log_e("test_max77958_get_customer_config ERROR: Timed out waiting for GPIO to finish\n");
 	}
     }
     if (op_code_return_buf[0] != 0x55){
-	rp2040_log_w("test_max77958_get_customer_config ERROR: OPCODE should be 0x55");
+	rp2040_log_e("test_max77958_get_customer_config ERROR: OPCODE should be 0x55");
     }
     if ((op_code_return_buf[2] | (op_code_return_buf[3] << 8)) != 0x0B6A){
-        rp2040_log_w("test_max77958_get_customer_config ERROR: CUSTOMER_CONFIG_ID should be 0x0B6A");
+        rp2040_log_e("test_max77958_get_customer_config ERROR: CUSTOMER_CONFIG_ID should be 0x0B6A");
     }
     if ((op_code_return_buf[4] | (op_code_return_buf[5] << 8)) != 0x6860){
-	rp2040_log_w("test_max77958_get_customer_config ERROR: CUSTOMER_CONFIG_REV should be 0x6860");
+	rp2040_log_e("test_max77958_get_customer_config ERROR: CUSTOMER_CONFIG_REV should be 0x6860");
     }
     rp2040_log_i("test_max77958_get_customer_config: 0x51=0x%02x\n", op_code_return_buf[0]);
     rp2040_log_i("test_max77958_get_customer_config: 0x52=0x%02x\n", op_code_return_buf[1]);
@@ -835,7 +835,7 @@ void test_max77958_interrupt(){
     rp2040_log_i("test_max77958_interrupt: prior to driving low GPIO%d. Current Value:%d\n", _gpio_interrupt, gpio_get(_gpio_interrupt));
     gpio_set_dir(_gpio_interrupt, GPIO_OUT);
     if (gpio_get(_gpio_interrupt) != 0){
-	rp2040_log_w("ERROR: test_max77958_interrupt: GPIO%d was not driven low. Current Value:%d\n", _gpio_interrupt, gpio_get(_gpio_interrupt));
+	rp2040_log_e("ERROR: test_max77958_interrupt: GPIO%d was not driven low. Current Value:%d\n", _gpio_interrupt, gpio_get(_gpio_interrupt));
     }
     rp2040_log_i("test_max77958_interrupt: after driving low GPIO%d. Current Value:%d\n", _gpio_interrupt, gpio_get(_gpio_interrupt));
     uint32_t i = 0;
@@ -844,7 +844,7 @@ void test_max77958_interrupt(){
 	tight_loop_contents();
 	i++;
 	if (i > 1000){
-	    rp2040_log_w("ERROR: test_max77958_interrupt timed out\n");
+	    rp2040_log_e("ERROR: test_max77958_interrupt timed out\n");
 	}
     }
     gpio_set_dir(_gpio_interrupt, GPIO_IN);
@@ -1157,7 +1157,7 @@ void max77958_shutdown(uint gpio_interrupt){
 	sleep_ms(100);
 	i++;
 	if (i > 10){
-	    rp2040_log_w("ERROR: Timed out waiting for GPIO to finish\n");
+	    rp2040_log_e("ERROR: Timed out waiting for GPIO to finish\n");
 	}
     }
 }
