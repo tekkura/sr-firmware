@@ -21,6 +21,8 @@ typedef struct {
     char log_array[LOG_BUFFER_LINE_COUNT][LOG_BUFFER_CHAR_LIMIT];
     // create an array storing the variable size of each line in the log_array
     uint16_t log_array_line_size[LOG_BUFFER_LINE_COUNT];
+    // number of populated entries currently stored in the ring
+    uint16_t count;
     uint16_t head;
     uint16_t tail;
     volatile bool lock; // Added a lock variable
