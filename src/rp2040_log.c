@@ -1,4 +1,5 @@
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include "pico/mutex.h"
 #include "pico/types.h"
@@ -21,6 +22,37 @@ auto_init_mutex(rp2040_log_buffer_mutex);
 
 static bool rp2040_log_buffer_is_empty() {
     return log_buffer.count == 0;
+}
+
+static uint16_t rp2040_log_payload_size(uint16_t line_size) {
+    return line_size > 0 ? line_size - 1 : 0;
+}
+
+static void rp2040_log_drop_oldest() {
+    if (rp2040_log_buffer_is_empty()) {
+        return;
+    }
+
+    uint16_t payload_size = rp2040_log_payload_size(log_buffer.log_array_line_size[log_buffer.head]);
+    if (payload_size > log_buffer.byte_count) {
+        log_buffer.byte_count = 0;
+    } else {
+        log_buffer.byte_count -= payload_size;
+    }
+
+    log_buffer.log_array_line_size[log_buffer.head] = 0;
+    log_buffer.head = (log_buffer.head + 1) % LOG_BUFFER_LINE_COUNT;
+    log_buffer.count--;
+    if (rp2040_log_buffer_is_empty()) {
+        log_buffer.tail = log_buffer.head;
+    }
+}
+
+static void rp2040_log_make_room(uint16_t payload_size) {
+    while (log_buffer.count == LOG_BUFFER_LINE_COUNT ||
+           (uint32_t)log_buffer.byte_count + payload_size > UINT16_MAX) {
+        rp2040_log_drop_oldest();
+    }
 }
 
 // Initialize the circular buffer
@@ -76,6 +108,8 @@ void rp2040_log(int level, const char* format, ...) {
 	len = LOG_BUFFER_CHAR_LIMIT;
     }
 
+    uint16_t payload_size = rp2040_log_payload_size(len);
+    rp2040_log_make_room(payload_size);
 
     // Format the message and copy it to the buffer, handling wrapping
     va_start(args, format); // Restart the argument list
@@ -83,11 +117,8 @@ void rp2040_log(int level, const char* format, ...) {
     va_end(args);
 
     log_buffer.log_array_line_size[log_buffer.tail] = len; // store the size of the line -2 for removing \n and null terminator
-    if (log_buffer.count == LOG_BUFFER_LINE_COUNT) {
-        log_buffer.head = (log_buffer.head + 1) % LOG_BUFFER_LINE_COUNT;
-    } else {
-        log_buffer.count++;
-    }
+    log_buffer.byte_count += payload_size;
+    log_buffer.count++;
     log_buffer.tail = (log_buffer.tail + 1) % LOG_BUFFER_LINE_COUNT; // Update tail correctly
 
     rp2040_log_release_lock(); // Release the lock
@@ -95,22 +126,7 @@ void rp2040_log(int level, const char* format, ...) {
 
 // Function to retrieve the total number of bytes within the log_array
 uint16_t rp2040_get_byte_count() {
-   // Sum only populated entries within the live ring segment.
-   uint16_t byte_count = 0;
-   if (rp2040_log_buffer_is_empty()) {
-       return 0;
-   }
-
-   uint16_t index = log_buffer.head;
-   for (uint16_t i = 0; i < log_buffer.count; i++) {
-       uint16_t line_size = log_buffer.log_array_line_size[index];
-       if (line_size > 0) {
-           byte_count += line_size - 1;
-       }
-       index = (index + 1) % LOG_BUFFER_LINE_COUNT;
-   }
-
-   return byte_count;
+   return log_buffer.byte_count;
 }
 
 void rp2040_log_flush(){
@@ -132,4 +148,5 @@ void rp2040_log_flush(){
     log_buffer.head = 0;
     log_buffer.tail = 0;
     log_buffer.count = 0;
+    log_buffer.byte_count = 0;
 }

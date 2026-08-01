@@ -23,6 +23,7 @@ typedef struct {
     uint16_t log_array_line_size[LOG_BUFFER_LINE_COUNT];
     // number of populated entries currently stored in the ring
     uint16_t count;
+    uint16_t byte_count;
     uint16_t head;
     uint16_t tail;
     volatile bool lock; // Added a lock variable
