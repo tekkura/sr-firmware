@@ -70,7 +70,6 @@ uint8_t bq27742_g1_get_safety_stats(){
     
     uint8_t low_byte = return_buf[0];
     bool error = false;
-    rp2040_log_w("SafetyStats: ");
     if (low_byte & ISD_MASK){
         rp2040_log_w("Internal Short condition detected, ");
         error = true;
@@ -96,7 +95,7 @@ uint8_t bq27742_g1_get_safety_stats(){
         error = true;
     }
     if (!error){
-        rp2040_log_w("No error detected in battery protection\n");
+        rp2040_log_d("No error detected in battery protection\n");
     }
   return low_byte;  
 }
@@ -139,7 +138,6 @@ uint16_t bq27742_g1_get_flags(){
     uint16_t flags = (return_buf[1] << 8) | return_buf[0];
     bool error = false;
 
-    rp2040_log_w("Tags: ");
     if (flags & BATHI_MASK){
         rp2040_log_w("High battery voltage condition BATHI detected, ");
         error = true;
@@ -181,9 +179,8 @@ uint16_t bq27742_g1_get_flags(){
         error = true;
     }
     if (!error){
-        rp2040_log_w("No SystemStat errors detected");
+        rp2040_log_d("No SystemStat errors detected");
     }
-    rp2040_log_w("\n");
     return flags;
 }
 
