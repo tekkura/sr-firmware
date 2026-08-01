@@ -91,7 +91,9 @@ uint16_t rp2040_get_byte_count() {
    // sum up the values witin log_array_line_size
    uint16_t byte_count = 0; 
    for (int i = 0; i < LOG_BUFFER_LINE_COUNT; i++) {
-	   byte_count += log_buffer.log_array_line_size[i] - 1;
+	   if (log_buffer.log_array_line_size[i] > 0) {
+	       byte_count += log_buffer.log_array_line_size[i] - 1;
+	   }
    }
    return byte_count;
 }

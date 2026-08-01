@@ -251,8 +251,8 @@ uint32_t max77976_get_chg_details(){
     i2c_read_error_handling(i2c1, MAX77976_ADDR, return_buf, 1, false);
     uint8_t CHG_DETAILS_00 = return_buf[0];
     uint8_t CHGIN_DTLS = (CHG_DETAILS_00 & 0x60) >> 5;
-    rp2040_log_d("CHG_DETAILS_00: 0x%02x\n CHGIN_DTLS: 0x%02x\n", CHG_DETAILS_00, CHGIN_DTLS);
-    rp2040_log_d("CHG_DETAILS_00_CHGIN_DTLS: ");
+    rp2040_log_w("CHG_DETAILS_00: 0x%02x\n CHGIN_DTLS: 0x%02x\n", CHG_DETAILS_00, CHGIN_DTLS);
+    rp2040_log_w("CHG_DETAILS_00_CHGIN_DTLS: ");
     switch (CHGIN_DTLS){
         case 0b00:
 	    rp2040_log_w("VBUS is invalid. VCHGIN rising: VCHGIN < VCHGIN_UVLO. VCHGIN falling: VCHGIN < VCHGIN_REG (AICL)");
@@ -266,7 +266,7 @@ uint32_t max77976_get_chg_details(){
         case 0b11:
 	    rp2040_log_d("VBUS is valid. VCHGIN > VCHGIN_UVLO and VCHGIN > VBATT + VCHGIN2SYS and VCHGIN < VCHGIN_OVLO");
 	    break;
-    }rp2040_log_d("\n");
+    }rp2040_log_w("\n");
     
     i2c_write_error_handling(i2c1, MAX77976_ADDR, &send_buf[1], 1, true);
     i2c_read_error_handling(i2c1, MAX77976_ADDR, return_buf, 1, false);
@@ -274,8 +274,8 @@ uint32_t max77976_get_chg_details(){
     uint8_t TREG = (CHG_DETAILS_01 & (1 << 7) ) >> 7;
     uint8_t BAT_DTLS = (CHG_DETAILS_01 & 0x70) >> 4;
     uint8_t CHG_DTLS = (CHG_DETAILS_01 & 0xF);
-    rp2040_log_d("CHG_DETAILS_01: 0x%02x\n TREG: 0x%02x\n BAT_DTLS: 0x%02x\n CHG_DTLS: 0x%02x\n", CHG_DETAILS_01, TREG, BAT_DTLS, CHG_DTLS);
-    rp2040_log_d("CHG_DETAILS_01_TREG: ");
+    rp2040_log_w("CHG_DETAILS_01: 0x%02x\n TREG: 0x%02x\n BAT_DTLS: 0x%02x\n CHG_DTLS: 0x%02x\n", CHG_DETAILS_01, TREG, BAT_DTLS, CHG_DTLS);
+    rp2040_log_w("CHG_DETAILS_01_TREG: ");
     switch (TREG){
         case 0b0:
 	    rp2040_log_d("The junction temperature is less than the threshold set by REGTEMP and the full charge current limit is available");
@@ -284,9 +284,9 @@ uint32_t max77976_get_chg_details(){
 	    rp2040_log_w("The junction temperature is greater than the threshold set by REGTEMP and the charge current limit may be folding back to reduce power dissipation.");
 	    break;
     }
-    rp2040_log_d("\n");
+    rp2040_log_w("\n");
 
-    rp2040_log_d("CHG_DETAILS_01_BAT_DTLS: ");
+    rp2040_log_w("CHG_DETAILS_01_BAT_DTLS: ");
     switch (BAT_DTLS){
         case 0b000:
 	    rp2040_log_w("Battery Removal");
@@ -312,9 +312,9 @@ uint32_t max77976_get_chg_details(){
         case 0b111:
 	    rp2040_log_d("Battery Only");
 	    break;
-    }rp2040_log_d("\n");
+    }rp2040_log_w("\n");
     
-    rp2040_log_d("CHG_DETAILS_01_CHG_DTLS: ");
+    rp2040_log_w("CHG_DETAILS_01_CHG_DTLS: ");
     switch (CHG_DTLS){
         case 0x00:
 	    rp2040_log_d("Charger is in dead-battery prequalification or low-battery prequalification mode.");
@@ -364,7 +364,7 @@ uint32_t max77976_get_chg_details(){
         case 0x0F:
 	    rp2040_log_d("Reserved");
 	    break;
-    }rp2040_log_d("\n");
+    }rp2040_log_w("\n");
     
     i2c_write_error_handling(i2c1, MAX77976_ADDR, &send_buf[2], 1, true);
     i2c_read_error_handling(i2c1, MAX77976_ADDR, return_buf, 1, false);
