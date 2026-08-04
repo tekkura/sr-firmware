@@ -26,6 +26,9 @@ CC_STATE_NAMES = {
     6: "DISABLED",
     7: "DEBUG_SINK",
 }
+GPIO_OPCODE = 0x24
+GPIO_VBUS_OFF = 0x05
+GPIO_VBUS_ON = 0x0f
 
 LIVE_FILTERS = (
     "on_start complete",
@@ -153,6 +156,39 @@ def parse_role_line(line):
     }
 
 
+def role_is_desired(role):
+    return (
+        role["state"] == 2
+        and role["pcb_power"] == "SOURCE"
+        and role["pcb_data"] == "UFP_DEVICE"
+        and role["pd_ready"] == 1
+    )
+
+
+def role_is_complete(role):
+    return (
+        role["state"] is not None
+        and role["pcb_power"] is not None
+        and role["pcb_data"] is not None
+        and role["pd_ready"] is not None
+    )
+
+
+def parse_opcode_read(line):
+    match = re.search(
+        r"opcode_read:\s+0x([0-9a-fA-F]{2})\s+0x([0-9a-fA-F]{2})\s+0x([0-9a-fA-F]{2})\s+0x([0-9a-fA-F]{2})",
+        line,
+    )
+    if not match:
+        return None
+    return [int(group, 16) for group in match.groups()]
+
+
+def gpio_opcode_matches(line, gpio_value):
+    values = parse_opcode_read(line)
+    return values is not None and values[0] == GPIO_OPCODE and values[2] == gpio_value
+
+
 def consume_uart_lines(fd, output, deadline, line_callback):
     chunks = []
     pending = ""
@@ -204,6 +240,7 @@ def wait_for_startup(fd, output, timeout):
 
 def wait_for_detach(fd, output, step_timeout):
     status = {
+        "vbus_off_command": False,
         "vbus_off": False,
         "detached": False,
         "last_role": None,
@@ -212,6 +249,9 @@ def wait_for_detach(fd, output, step_timeout):
 
     def saw_detach(line):
         if "MAX77958_DIAG: setting VBUS GPIO4/GPIO5 off" in line:
+            status["vbus_off_command"] = True
+
+        if status["vbus_off_command"] and gpio_opcode_matches(line, GPIO_VBUS_OFF):
             status["vbus_off"] = True
 
         if " pcb_power=" in line or "state=" in line:
@@ -228,6 +268,7 @@ def wait_for_detach(fd, output, step_timeout):
 
 def wait_for_reattach(fd, output, step_timeout):
     status = {
+        "vbus_on_command": False,
         "vbus_on": False,
         "desired": False,
         "last_role": None,
@@ -236,17 +277,16 @@ def wait_for_reattach(fd, output, step_timeout):
 
     def saw_desired(line):
         if "MAX77958_DIAG: setting VBUS GPIO4/GPIO5 on" in line:
+            status["vbus_on_command"] = True
+
+        if status["vbus_on_command"] and gpio_opcode_matches(line, GPIO_VBUS_ON):
             status["vbus_on"] = True
 
         if " pcb_power=" in line:
             role = parse_role_line(line)
             status["last_role"] = line
-            status["desired"] = (
-                role["state"] == 2
-                and role["pcb_power"] == "SOURCE"
-                and role["pcb_data"] == "UFP_DEVICE"
-                and role["pd_ready"] == 1
-            )
+            if role_is_complete(role):
+                status["desired"] = role_is_desired(role)
 
         return status["desired"] and status["vbus_on"]
 
@@ -256,30 +296,34 @@ def wait_for_reattach(fd, output, step_timeout):
 
 def desired_baseline_from_text(text):
     status = {
+        "vbus_on_command": False,
         "vbus_on": False,
         "desired": False,
         "last_role": None,
     }
     lines = text.splitlines()
-    last_on_index = -1
-    last_off_index = -1
+    last_on_command_index = -1
+    last_on_confirm_index = -1
+    last_off_confirm_index = -1
 
     for index, line in enumerate(lines):
         if "MAX77958_DIAG: setting VBUS GPIO4/GPIO5 on" in line:
-            last_on_index = index
-        if "MAX77958_DIAG: setting VBUS GPIO4/GPIO5 off" in line:
-            last_off_index = index
+            last_on_command_index = index
+        if gpio_opcode_matches(line, GPIO_VBUS_ON):
+            last_on_confirm_index = index
+        if gpio_opcode_matches(line, GPIO_VBUS_OFF):
+            last_off_confirm_index = index
         if " pcb_power=" in line:
             status["last_role"] = line
             role = parse_role_line(line)
-            status["desired"] = (
-                role["state"] == 2
-                and role["pcb_power"] == "SOURCE"
-                and role["pcb_data"] == "UFP_DEVICE"
-                and role["pd_ready"] == 1
-            )
+            if role_is_complete(role):
+                status["desired"] = role_is_desired(role)
 
-    status["vbus_on"] = last_on_index > last_off_index
+    status["vbus_on_command"] = last_on_command_index > last_off_confirm_index
+    status["vbus_on"] = (
+        last_on_confirm_index > last_off_confirm_index
+        and last_on_confirm_index > last_on_command_index
+    )
     return status["desired"] and status["vbus_on"], status
 
 
@@ -301,12 +345,14 @@ def run_interactive_cycles(fd, output_path, timeout, flash_process, cycles, step
             print(f"Waiting {step_timeout:.1f}s for post-startup attached baseline...", flush=True)
             baseline_text, baseline_ok, baseline_status = wait_for_reattach(fd, output, step_timeout)
             chunks.append(baseline_text.encode("utf-8", "replace"))
+            if not baseline_ok:
+                baseline_ok, baseline_status = desired_baseline_from_text(startup_text + baseline_text)
 
         if not baseline_ok:
             print(f"ERROR: startup baseline did not reach SOURCE + UFP + READY + VBUS on within {step_timeout:.1f}s")
             if baseline_status["last_role"]:
                 print(f"last role line: {baseline_status['last_role']}")
-            print(f"vbus_on_seen: {'yes' if baseline_status['vbus_on'] else 'no'}")
+            print(f"vbus_on_confirmed: {'yes' if baseline_status['vbus_on'] else 'no'}")
             text = b"".join(chunks).decode("utf-8", "replace")
             return text, marker_seen, 1
 
@@ -321,7 +367,7 @@ def run_interactive_cycles(fd, output_path, timeout, flash_process, cycles, step
                 print(f"ERROR: cycle {cycle} detach did not reach NO_CONNECTION + VBUS off within {step_timeout:.1f}s")
                 if detach_status["last_role"]:
                     print(f"last role line: {detach_status['last_role']}")
-                print(f"vbus_off_seen: {'yes' if detach_status['vbus_off'] else 'no'}")
+                print(f"vbus_off_confirmed: {'yes' if detach_status['vbus_off'] else 'no'}")
                 text = b"".join(chunks).decode("utf-8", "replace")
                 return text, marker_seen, 1
             print(f"Cycle {cycle}/{cycles}: detach confirmed.")
@@ -334,7 +380,7 @@ def run_interactive_cycles(fd, output_path, timeout, flash_process, cycles, step
                 print(f"ERROR: cycle {cycle} reattach did not reach SOURCE + UFP + READY + VBUS on within {step_timeout:.1f}s")
                 if attach_status["last_role"]:
                     print(f"last role line: {attach_status['last_role']}")
-                print(f"vbus_on_seen: {'yes' if attach_status['vbus_on'] else 'no'}")
+                print(f"vbus_on_confirmed: {'yes' if attach_status['vbus_on'] else 'no'}")
                 text = b"".join(chunks).decode("utf-8", "replace")
                 return text, marker_seen, 1
             print(f"Cycle {cycle}/{cycles}: reattach confirmed.")
@@ -509,9 +555,20 @@ def summarize(text, output_path, marker_seen, flash_process):
             g4_dir, g4_out, g5_dir, g5_out = (int(group) for group in final_gpio_match.groups())
             vbus_enabled = g4_dir == 1 and g4_out == 1 and g5_dir == 1 and g5_out == 1
         elif vbus_on_lines or vbus_off_lines:
-            last_on_index = max((index for index, line in enumerate(lines) if line in vbus_on_lines), default=-1)
-            last_off_index = max((index for index, line in enumerate(lines) if line in vbus_off_lines), default=-1)
-            vbus_enabled = last_on_index > last_off_index
+            last_on_confirm_index = max(
+                (index for index, line in enumerate(lines) if gpio_opcode_matches(line, GPIO_VBUS_ON)),
+                default=-1,
+            )
+            last_off_confirm_index = max(
+                (index for index, line in enumerate(lines) if gpio_opcode_matches(line, GPIO_VBUS_OFF)),
+                default=-1,
+            )
+            if last_on_confirm_index >= 0 or last_off_confirm_index >= 0:
+                vbus_enabled = last_on_confirm_index > last_off_confirm_index
+            else:
+                last_on_index = max((index for index, line in enumerate(lines) if line in vbus_on_lines), default=-1)
+                last_off_index = max((index for index, line in enumerate(lines) if line in vbus_off_lines), default=-1)
+                vbus_enabled = last_on_index > last_off_index
 
         print(
             "final role: "

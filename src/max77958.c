@@ -34,6 +34,8 @@ static uint8_t op_code_return_buf[33] = {0}; // Will read full buffer from regis
 #define MAX77958_OPCODE_WAIT_POLL_MS 10
 #define MAX77958_OPCODE_WAIT_DRAIN_MS 100
 #define MAX77958_OPCODE_WAIT_TIMEOUT_MS 1500
+#define MAX77958_OPCODE_RECOVERY_DELAY_MS 100
+#define MAX77958_OPCODE_RECOVERY_MAX_CHECKS 15
 #define MAX77958_UIC_INT_AP_CMD_RES (1u << 7)
 #define MAX77958_UIC_INT_CHG_TYPE (1u << 1)
 #define MAX77958_PD_INT_PS_RDY (1u << 6)
@@ -55,8 +57,10 @@ static uint8_t data_role_swap_request_count = 0;
 static bool vbus_enable_requested = false;
 static bool source_dfp_not_ready_recheck_pending = false;
 static bool post_prswap_vbus_recheck_pending = false;
+static bool opcode_recovery_pending = false;
 static uint8_t source_dfp_not_ready_recheck_count = 0;
 static uint8_t post_prswap_vbus_recheck_count = 0;
+static uint8_t opcode_recovery_check_count = 0;
 static queue_t opcode_queue;
 static uint8_t _gpio_interrupt;
 static uint8_t interrupt_mask = GPIO_IRQ_EDGE_FALL;
@@ -83,6 +87,9 @@ static bool evaluate_current_role_state(const char *reason);
 static bool queue_power_role_swap_to_source_if_ready(const char *reason);
 static bool queue_data_role_swap_to_ufp_if_ready(const char *reason);
 static bool queue_vbus_on_after_pr_swap_if_source_attached(void);
+static int32_t opcode_recovery_check(int32_t unused);
+static int64_t opcode_recovery_alarm(alarm_id_t id, void *user_data);
+static void schedule_opcode_recovery_check(void);
 static int32_t delayed_role_recheck(int32_t reason);
 static int64_t delayed_role_recheck_alarm(alarm_id_t id, void *user_data);
 static void schedule_delayed_role_recheck(int32_t reason);
@@ -248,6 +255,8 @@ static int on_opcode_cmd_response(){
     // You can now READ back the OpCommand return registers
     opcode_read();
     opcode_in_flight = false;
+    opcode_recovery_pending = false;
+    opcode_recovery_check_count = 0;
     // opcode_queue_pop will return false if the opcode queue is empty
     if (!opcode_queue_pop()){
         opcodes_finished = true;
@@ -1141,6 +1150,9 @@ static bool opcode_queue_pop(){
 	// if the call_queue is full, assert
 	if(queue_try_add(call_queue_ptr, &entry)){
             opcode_in_flight = true;
+            opcode_recovery_check_count = 0;
+            opcode_recovery_pending = false;
+            schedule_opcode_recovery_check();
 	    rp2040_log("added opcode entry to call_queue\n");
 	    return true;
 	}else{
@@ -1432,6 +1444,65 @@ static bool queue_vbus_on_after_pr_swap_if_source_attached(void)
     rp2040_log("MAX77958_DIAG: post PR_SWAP source attached; enabling VBUS GPIO4/GPIO5\n");
     vbus_turn_on();
     return true;
+}
+
+static int64_t opcode_recovery_alarm(alarm_id_t id, void *user_data)
+{
+    (void)id;
+    (void)user_data;
+    queue_entry_t entry = {opcode_recovery_check, 0};
+
+    if (call_queue_ptr == NULL || !queue_try_add(call_queue_ptr, &entry)) {
+        opcode_recovery_pending = false;
+        rp2040_log("MAX77958_DIAG: failed to queue opcode recovery check\n");
+    }
+
+    return 0;
+}
+
+static void schedule_opcode_recovery_check(void)
+{
+    if (!opcode_in_flight || opcode_recovery_pending) {
+        return;
+    }
+
+    if (opcode_recovery_check_count >= MAX77958_OPCODE_RECOVERY_MAX_CHECKS) {
+        rp2040_log("MAX77958_DIAG: opcode recovery exhausted in_flight=%u queue=%u\n",
+                    opcode_in_flight ? 1 : 0, queue_get_level(&opcode_queue));
+        return;
+    }
+
+    opcode_recovery_check_count++;
+    opcode_recovery_pending = true;
+    rp2040_log("MAX77958_DIAG: scheduling opcode recovery check count=%u/%u delay_ms=%u\n",
+                opcode_recovery_check_count,
+                MAX77958_OPCODE_RECOVERY_MAX_CHECKS,
+                MAX77958_OPCODE_RECOVERY_DELAY_MS);
+    if (add_alarm_in_ms(MAX77958_OPCODE_RECOVERY_DELAY_MS,
+                        opcode_recovery_alarm,
+                        NULL,
+                        false) < 0) {
+        opcode_recovery_pending = false;
+        rp2040_log("MAX77958_DIAG: failed to schedule opcode recovery check\n");
+    }
+}
+
+static int32_t opcode_recovery_check(int32_t unused)
+{
+    (void)unused;
+    opcode_recovery_pending = false;
+
+    if (!opcode_in_flight) {
+        opcode_recovery_check_count = 0;
+        return 0;
+    }
+
+    if (service_pending_interrupt_snapshot("opcode recovery", true)) {
+        return 0;
+    }
+
+    schedule_opcode_recovery_check();
+    return 0;
 }
 
 static int64_t delayed_role_recheck_alarm(alarm_id_t id, void *user_data)
