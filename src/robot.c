@@ -24,6 +24,9 @@
 #include "rp2040_log.h"
 #include "serial_comm_manager.h"
 #include "hardware/pwm.h"
+#ifdef EXTERNAL_MAX77958_TEST
+#include "external_max77958_test.h"
+#endif
 
 // Use the same UART definitions as rp2040_log.c
 #if PICO_DEFAULT_UART == 0
@@ -169,6 +172,9 @@ int main(){
     sleep_ms(1000);
     while (true){
         get_block();
+#ifndef BOARD_PICO
+        max77958_poll_opcode_diagnostics();
+#endif
 	if (shutdown){
 	    on_shutdown();
 	    break;
@@ -206,6 +212,10 @@ void on_start(){
 
     #ifndef BOARD_PICO
     i2c_start();
+    #ifdef EXTERNAL_MAX77958_TEST
+    external_max77958_i2c1_test();
+    return;
+    #endif
     adc_init();
     turn_on_leds();
     STWLC38JRM_init(WIRELESS_CHG_EN, WIRELESS_CHG_VRECT);
@@ -214,6 +224,9 @@ void on_start(){
     sn74ahc125rgyr_init(SN74AHC125RGYR_GPIO1);
     sn74ahc125rgyr_init(SN74AHC125RGYR_GPIO2);
     max77958_init(MAX77958_INTB, &call_queue, &results_queue);
+    if (!max77958_wait_for_init_complete()) {
+        assert(false);
+    }
     #endif
 
     sleep_ms(1000);
@@ -269,6 +282,7 @@ void on_start(){
 #ifdef DRV8830_SCOPE_TEST
     drv8830_scope_test_run();
 #endif
+    max77958_on_start_complete();
 #endif
     //while(!stdio_usb_connected()){
     //    sleep_ms(100);

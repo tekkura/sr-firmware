@@ -3,6 +3,7 @@
 #include <string.h>
 #include <assert.h>
 #include "pico/stdlib.h"
+#include "pico/mutex.h"
 #include "hardware/i2c.h"
 #include "max77958.h"
 #include "max77958_driver.h"
@@ -14,27 +15,111 @@
 static uint8_t send_buf[33] = {0};
 static uint8_t return_buf[33] = {0}; 
 static uint8_t op_code_return_buf[33] = {0}; // Will read full buffer from registers 0x52 to 0x71
+auto_init_mutex(max77958_i2c_mutex);
+#define PDMSG_POWER_SUPPLY_VBUS_ENABLE 0x17
+#define PDMSG_POWER_SUPPLY_VBUS_DISABLE 0x18
+#define MAX77958_SWAP_REQ_DR_SWAP 0x01
+#define MAX77958_SWAP_REQ_PR_SWAP 0x02
+#define MAX77958_SWAP_RESP_SOURCE_UFP 0x10
+#define CC_STATUS0_STATE_SINK 0x01
+#define CC_STATUS0_STATE_SOURCE 0x02
+#define PD_STATUS1_DATA_ROLE_DFP (1u << 7)
+#define PD_STATUS1_PSRDY (1u << 4)
+#define MAX77958_PR_SWAP_MAX_RETRIES 5
+#define MAX77958_DR_SWAP_MAX_RETRIES 3
+#define MAX77958_STARTUP_SETTLE_MS 300
+#define MAX77958_ROLE_RECHECK_DELAY_MS 250
+#define MAX77958_SOURCE_DFP_NOT_READY_MAX_RECHECKS 8
+#define MAX77958_POST_PRSWAP_VBUS_MAX_RECHECKS 8
+#define MAX77958_RECHECK_SOURCE_DFP_NOT_READY 1
+#define MAX77958_RECHECK_POST_PRSWAP_VBUS 2
+#define MAX77958_OPCODE_WAIT_POLL_MS 10
+#define MAX77958_OPCODE_WAIT_DRAIN_MS 100
+#define MAX77958_OPCODE_WAIT_TIMEOUT_MS 1500
+#define MAX77958_OPCODE_RECOVERY_DELAY_MS 100
+#define MAX77958_OPCODE_RECOVERY_MAX_CHECKS 15
+#define MAX77958_UIC_INT_AP_CMD_RES (1u << 7)
+#define MAX77958_UIC_INT_CHG_TYPE (1u << 1)
+#define MAX77958_PD_INT_PS_RDY (1u << 6)
+#define MAX77958_PD_INT_MSG (1u << 7)
+#define MAX77958_CC_INT_CC_STAT (1u << 0)
+#define MAX77958_CC_INT_CCV_CN_STAT (1u << 1)
+#define MAX77958_CC_INT_CCI_STAT (1u << 2)
+#define MAX77958_CC_INT_CC_PIN_STAT (1u << 3)
 static queue_t* call_queue_ptr;
 static queue_t* return_queue_ptr;
 static bool opcode_cmd_finished = false;
 static bool power_swap_enabled = true;
-static bool opcodes_finished = false;
+static volatile bool opcodes_finished = false;
+static volatile bool opcode_in_flight = false;
+static bool data_role_swap_requested = false;
+static bool init_config_pending = false;
+static uint8_t power_role_swap_request_count = 0;
+static uint8_t data_role_swap_request_count = 0;
+static bool vbus_enable_requested = false;
+static bool source_dfp_not_ready_recheck_pending = false;
+static bool post_prswap_vbus_recheck_pending = false;
+static volatile bool opcode_recovery_pending = false;
+static uint8_t source_dfp_not_ready_recheck_count = 0;
+static uint8_t post_prswap_vbus_recheck_count = 0;
+static volatile uint8_t opcode_recovery_check_count = 0;
+static volatile uint32_t opcode_trace_next_id = 1;
+static volatile uint32_t opcode_trace_current_id = 0;
+static int32_t (*volatile opcode_trace_current_func)() = NULL;
+static volatile int32_t opcode_trace_current_data = 0;
+static volatile uint32_t opcode_trace_dispatch_ms = 0;
+static volatile bool opcode_trace_func_entered = false;
+static volatile bool opcode_trace_write_started = false;
+static volatile bool opcode_trace_write_done = false;
+static volatile bool opcode_trace_timeout_logged = false;
+static volatile uint8_t opcode_trace_cmd0 = 0;
+static volatile uint8_t opcode_trace_cmd1 = 0;
+static volatile uint8_t opcode_trace_cmd2 = 0;
+static volatile uint8_t opcode_trace_cmd3 = 0;
 static queue_t opcode_queue;
 static uint8_t _gpio_interrupt;
 static uint8_t interrupt_mask = GPIO_IRQ_EDGE_FALL;
 static bool test_max77958_interrupt_bool = false;
 static bool test_max77958_started = false;
 static bool test_max77958_completed = false;
+static volatile uint32_t max77958_irq_count = 0;
+static volatile uint32_t max77958_irq_queue_full_count = 0;
+static volatile uint32_t max77958_irq_test_queue_full_count = 0;
+static volatile uint32_t opcode_recovery_queue_full_count = 0;
+static volatile uint32_t delayed_role_recheck_queue_full_count = 0;
 
 static int32_t parse_interrupt_vals();
+static int32_t handle_interrupt_vals(uint8_t uic_int, uint8_t cc_int, uint8_t pd_int);
 static void on_interrupt();
 static void get_interrupt_vals();
+static void read_interrupt_vals(uint8_t *uic_int, uint8_t *cc_int, uint8_t *pd_int, uint8_t *action_int);
 static void get_interrupt_masks();
 static void set_interrupt_masks();
+static uint8_t max77958_read_register(uint8_t reg);
 static void opcode_read();
+static bool wait_for_opcode_response(const char *context, uint32_t timeout_ms);
+static bool service_pending_interrupt_snapshot(const char *context, bool log_snapshot);
 static int opcode_write(uint8_t *send_buf);
 static int32_t max77958_test_response();
-static void power_swap_request();
+static int32_t power_swap_request(void);
+static int32_t swap_response_write(void);
+static int32_t data_role_swap_request(void);
+static bool evaluate_current_role_state(const char *reason);
+static bool queue_power_role_swap_to_source_if_ready(const char *reason);
+static bool queue_data_role_swap_to_ufp_if_ready(const char *reason);
+static bool queue_vbus_on_after_pr_swap_if_source_attached(void);
+static const char *opcode_func_name(int32_t (*opcode_func)());
+static void opcode_trace_mark_func_entry(const char *name, int32_t data);
+static void opcode_trace_log_timeout_classification(void);
+static void opcode_trace_log_timeout_once(void);
+static int32_t opcode_recovery_check(int32_t unused);
+static int64_t opcode_recovery_alarm(alarm_id_t id, void *user_data);
+static void schedule_opcode_recovery_check(void);
+static int32_t start_complete_role_check(int32_t unused);
+static int32_t delayed_role_recheck(int32_t reason);
+static int64_t delayed_role_recheck_alarm(alarm_id_t id, void *user_data);
+static void schedule_delayed_role_recheck(int32_t reason);
+static bool queue_data_role_swap_to_ufp_once(void);
 static int32_t set_snk_pdos();
 static int32_t pd_msg_response();
 static int32_t customer_config_write();
@@ -42,6 +127,9 @@ static bool opcode_queue_pop();
 static void opcode_queue_add(int32_t (*opcode_func)(), int32_t opcode_data);
 static int32_t gpio_bool_to_int32(bool _GPIO4, bool _GPIO5);
 static int32_t gpio_set(int32_t gpio_val);
+#ifdef MAX77958_FORCE_VBUS_DIAGNOSTIC
+static int32_t force_vbus_on_for_diagnostic(void);
+#endif
 static int32_t set_src_pdos();
 static void on_ccstat_change();
 static void on_chgtype_change();
@@ -54,27 +142,279 @@ static int32_t bc_ctrl1_read();
 static int32_t bc_ctrl2_read();
 static int32_t control1_read();
 static int32_t cc_ctrl1_read();
+static int32_t cc_ctrl1_write_snk_only(void);
 static int32_t cc_ctrl4_read(void);
 static int32_t gpio_control_read(void);
 static int32_t gpio0_gpio1_adc_read(void);
 static int32_t snk_pdo_request();
 static int32_t customer_config_read();
+
+static void max77958_i2c_lock(void)
+{
+    mutex_enter_blocking(&max77958_i2c_mutex);
+}
+
+static void max77958_i2c_unlock(void)
+{
+    mutex_exit(&max77958_i2c_mutex);
+}
+
+static void max77958_read_bytes(uint8_t reg, uint8_t *dst, size_t len)
+{
+    max77958_i2c_lock();
+    i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, &reg, 1, true);
+    i2c_read_error_handling(i2c0, MAX77958_SLAVE_P1, dst, len, false);
+    max77958_i2c_unlock();
+}
+
+static void max77958_write_bytes(const uint8_t *src, size_t len)
+{
+    max77958_i2c_lock();
+    i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, src, len, false);
+    max77958_i2c_unlock();
+}
 typedef struct {
     const char *name;
     uint8_t reg;
     uint8_t expected;
 } max77958_status_reg_t;
 
+typedef enum {
+    MAX77958_PCB_POWER_UNKNOWN,
+    MAX77958_PCB_POWER_SINK,
+    MAX77958_PCB_POWER_SOURCE,
+} max77958_pcb_power_role_t;
+
+typedef enum {
+    MAX77958_PCB_DATA_UFP_DEVICE,
+    MAX77958_PCB_DATA_DFP_HOST,
+} max77958_pcb_data_role_t;
+
+typedef struct {
+    uint8_t cc_status0;
+    uint8_t pd_status1;
+    uint8_t cc_state;
+    max77958_pcb_power_role_t pcb_power;
+    max77958_pcb_data_role_t pcb_data;
+    bool pd_ready;
+    bool attached;
+} max77958_role_state_t;
+
+static const char *cc_state_name(uint8_t state)
+{
+    switch (state) {
+        case 0: return "NO_CONNECTION";
+        case 1: return "SINK_ATTACHED";
+        case 2: return "SOURCE_ATTACHED";
+        case 3: return "AUDIO_ACCESSORY";
+        case 4: return "DEBUG_SOURCE";
+        case 5: return "ERROR";
+        case 6: return "DISABLED";
+        case 7: return "DEBUG_SINK";
+        default: return "UNKNOWN";
+    }
+}
+
+static const char *data_role_name(uint8_t data_role)
+{
+    return data_role ? "DFP_HOST" : "UFP_DEVICE";
+}
+
+static const char *pcb_power_role_name(max77958_pcb_power_role_t role)
+{
+    switch (role) {
+        case MAX77958_PCB_POWER_SINK: return "SINK";
+        case MAX77958_PCB_POWER_SOURCE: return "SOURCE";
+        case MAX77958_PCB_POWER_UNKNOWN:
+        default: return "UNKNOWN";
+    }
+}
+
+static const char *pcb_data_role_name(max77958_pcb_data_role_t role)
+{
+    switch (role) {
+        case MAX77958_PCB_DATA_DFP_HOST: return "DFP_HOST";
+        case MAX77958_PCB_DATA_UFP_DEVICE:
+        default: return "UFP_DEVICE";
+    }
+}
+
+static const char *ready_name(uint8_t psrdy)
+{
+    return psrdy ? "READY" : "NOT_READY";
+}
+
+static max77958_role_state_t max77958_read_role_state(void)
+{
+    max77958_role_state_t state = {0};
+
+    state.cc_status0 = max77958_read_register(REG_CC_STATUS0);
+    state.pd_status1 = max77958_read_register(REG_PD_STATUS1);
+    state.cc_state = state.cc_status0 & 0x07;
+    state.pd_ready = (state.pd_status1 & PD_STATUS1_PSRDY) != 0;
+    state.pcb_data = (state.pd_status1 & PD_STATUS1_DATA_ROLE_DFP) != 0
+        ? MAX77958_PCB_DATA_DFP_HOST
+        : MAX77958_PCB_DATA_UFP_DEVICE;
+
+    switch (state.cc_state) {
+        case CC_STATUS0_STATE_SINK:
+            state.pcb_power = MAX77958_PCB_POWER_SINK;
+            state.attached = true;
+            break;
+        case CC_STATUS0_STATE_SOURCE:
+            state.pcb_power = MAX77958_PCB_POWER_SOURCE;
+            state.attached = true;
+            break;
+        default:
+            state.pcb_power = MAX77958_PCB_POWER_UNKNOWN;
+            state.attached = false;
+            break;
+    }
+
+    return state;
+}
+
+static void log_role_state(const char *prefix, const char *reason, const max77958_role_state_t *state)
+{
+    rp2040_log("MAX77958_DIAG: %s reason=%s CC0=0x%02x state=%u(%s) PD1=0x%02x pcb_power=%s pcb_data=%s pd_ready=%u(%s)\n",
+                prefix, reason, state->cc_status0, state->cc_state,
+                cc_state_name(state->cc_state), state->pd_status1,
+                pcb_power_role_name(state->pcb_power),
+                pcb_data_role_name(state->pcb_data),
+                state->pd_ready ? 1 : 0, ready_name(state->pd_ready ? 1 : 0));
+}
+
+static const char *opcode_func_name(int32_t (*opcode_func)())
+{
+    if (opcode_func == gpio_set) {
+        return "gpio_set";
+    }
+    if (opcode_func == power_swap_request) {
+        return "power_swap_request";
+    }
+    if (opcode_func == data_role_swap_request) {
+        return "data_role_swap_request";
+    }
+    if (opcode_func == swap_response_write) {
+        return "swap_response_write";
+    }
+    if (opcode_func == customer_config_write) {
+        return "customer_config_write";
+    }
+    if (opcode_func == cc_ctrl1_write_snk_only) {
+        return "cc_ctrl1_write_snk_only";
+    }
+    if (opcode_func == bc_ctrl1_read) {
+        return "bc_ctrl1_read";
+    }
+    if (opcode_func == bc_ctrl2_read) {
+        return "bc_ctrl2_read";
+    }
+    if (opcode_func == control1_read) {
+        return "control1_read";
+    }
+    if (opcode_func == cc_ctrl1_read) {
+        return "cc_ctrl1_read";
+    }
+    if (opcode_func == cc_ctrl4_read) {
+        return "cc_ctrl4_read";
+    }
+    if (opcode_func == gpio_control_read) {
+        return "gpio_control_read";
+    }
+    if (opcode_func == gpio0_gpio1_adc_read) {
+        return "gpio0_gpio1_adc_read";
+    }
+    if (opcode_func == snk_pdo_request) {
+        return "snk_pdo_request";
+    }
+    if (opcode_func == customer_config_read) {
+        return "customer_config_read";
+    }
+#ifdef MAX77958_FORCE_VBUS_DIAGNOSTIC
+    if (opcode_func == force_vbus_on_for_diagnostic) {
+        return "force_vbus_on_for_diagnostic";
+    }
+#endif
+    return "unknown";
+}
+
+static void opcode_trace_mark_func_entry(const char *name, int32_t data)
+{
+    opcode_trace_func_entered = true;
+    rp2040_log("MAX77958_DIAG: opcode trace id=%" PRIu32 " function entry name=%s data=0x%08" PRIx32 " INTB=%u\n",
+                opcode_trace_current_id, name, (uint32_t)data, gpio_get(_gpio_interrupt));
+}
+
+static void opcode_trace_log_timeout_classification(void)
+{
+    const char *classification = "MAX77958 opcode response not observed after opcode write";
+
+    if (!opcode_trace_func_entered) {
+        classification = "call_queue dispatch did not reach opcode function";
+    } else if (!opcode_trace_write_started) {
+        classification = "opcode function entered but opcode_write was not reached";
+    } else if (!opcode_trace_write_done) {
+        classification = "opcode_write started but did not complete";
+    }
+
+    rp2040_log("MAX77958_DIAG: opcode trace id=%" PRIu32 " classification=%s func=%s data=0x%08" PRIx32 " cmd=0x%02x/0x%02x/0x%02x/0x%02x age_ms=%" PRIu32 " queue=%u INTB=%u\n",
+                opcode_trace_current_id,
+                classification,
+                opcode_func_name(opcode_trace_current_func),
+                (uint32_t)opcode_trace_current_data,
+                opcode_trace_cmd0,
+                opcode_trace_cmd1,
+                opcode_trace_cmd2,
+                opcode_trace_cmd3,
+                to_ms_since_boot(get_absolute_time()) - opcode_trace_dispatch_ms,
+                queue_get_level(&opcode_queue),
+                gpio_get(_gpio_interrupt));
+}
+
+static void opcode_trace_log_timeout_once(void)
+{
+    if (opcode_trace_timeout_logged) {
+        return;
+    }
+
+    opcode_trace_timeout_logged = true;
+    opcode_trace_log_timeout_classification();
+}
+
 
 
 void max77958_on_interrupt(uint gpio, uint32_t event_mask){
+    (void)gpio;
     if (event_mask & interrupt_mask){
         gpio_acknowledge_irq(_gpio_interrupt, interrupt_mask);	
-	call_queue_try_add(&parse_interrupt_vals, 0);
+        max77958_irq_count++;
+        bool parse_queued = call_queue_try_add_nonblocking(&parse_interrupt_vals, 0);
+        if (!parse_queued) {
+            max77958_irq_queue_full_count++;
+            assert(false);
+        }
         if (test_max77958_started){
-            call_queue_try_add(&max77958_test_response, 1);
+            bool test_queued = call_queue_try_add_nonblocking(&max77958_test_response, 1);
+            if (!test_queued) {
+                max77958_irq_test_queue_full_count++;
+            }
         }
     }
+}
+
+void max77958_poll_opcode_diagnostics(void)
+{
+    if (!opcode_in_flight || opcode_trace_timeout_logged) {
+        return;
+    }
+
+    uint32_t age_ms = to_ms_since_boot(get_absolute_time()) - opcode_trace_dispatch_ms;
+    if (age_ms < MAX77958_OPCODE_WAIT_TIMEOUT_MS) {
+        return;
+    }
+
+    opcode_trace_log_timeout_once();
 }
 
 static int on_pd_msg_received(){
@@ -85,10 +425,25 @@ static int on_pd_msg_received(){
 
 static int on_opcode_cmd_response(){
     // You can now READ back the OpCommand return registers
+    rp2040_log("MAX77958_DIAG: opcode trace id=%" PRIu32 " AP_CMD_RES handling func=%s queue=%u INTB=%u\n",
+                opcode_trace_current_id,
+                opcode_func_name(opcode_trace_current_func),
+                queue_get_level(&opcode_queue),
+                gpio_get(_gpio_interrupt));
     opcode_read();
+    opcode_in_flight = false;
+    opcode_recovery_pending = false;
+    opcode_recovery_check_count = 0;
     // opcode_queue_pop will return false if the opcode queue is empty
     if (!opcode_queue_pop()){
         opcodes_finished = true;
+        if (init_config_pending) {
+            init_config_pending = false;
+            sleep_ms(MAX77958_STARTUP_SETTLE_MS);
+            if (evaluate_current_role_state("init complete")) {
+                opcode_queue_pop();
+            }
+        }
     }
     return 0;
 }
@@ -96,14 +451,11 @@ static int on_opcode_cmd_response(){
 static void on_ccstat_change(void) {
     rp2040_log("CCStat: ccstat changed\n");
 
-    memset(send_buf, 0, sizeof send_buf);
-    memset(return_buf, 0, sizeof return_buf);
-    send_buf[0] = 0x0C; // CC_STATUS0
-    i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, send_buf, 1, true);
-    i2c_read_error_handling(i2c0, MAX77958_SLAVE_P1, return_buf, 2, false);
+    uint8_t cc_status[2] = {0};
+    max77958_read_bytes(0x0C, cc_status, sizeof cc_status);
 
-    uint8_t cc_status0 = return_buf[0];
-    uint8_t cc_status1 = return_buf[1];
+    uint8_t cc_status0 = cc_status[0];
+    uint8_t cc_status1 = cc_status[1];
 
     // ----- CC_STATUS0 bitfields -----
     uint8_t CCPinStat  = cc_status0 & 0b11000000;   // bits [7:6]
@@ -143,15 +495,26 @@ static void on_ccstat_change(void) {
     switch (CCStat){
         case 0b000:
             rp2040_log("CCStat: ccstat changed to no connection\n");
-            vbus_turn_off();
+            if (init_config_pending) {
+                rp2040_log("MAX77958_DIAG: deferring detach action while init config is pending\n");
+            } else {
+                power_role_swap_request_count = 0;
+                vbus_turn_off();
+            }
             break;
         case 0b001:
             rp2040_log("CCStat: ccstat changed to SINK\n");
-            vbus_turn_off();
+            if (init_config_pending) {
+                rp2040_log("MAX77958_DIAG: deferring sink action while init config is pending\n");
+            } else {
+                vbus_turn_off();
+            }
             break;
         case 0b010:
             rp2040_log("CCStat: ccstat changed to SOURCE\n");
-            //vbus_turn_on();
+            if (init_config_pending) {
+                rp2040_log("MAX77958_DIAG: deferring VBUS enable for init-time SOURCE transient\n");
+            }
             break;
         default:
             rp2040_log("CCStat: ccstat changed to %d\n", CCStat);
@@ -173,12 +536,9 @@ static void on_ccstat_change(void) {
 
 static void on_chgtype_change(){
     rp2040_log("chgtype changed\n");
-    memset(send_buf, 0, sizeof send_buf);
-    memset(return_buf, 0, sizeof return_buf);
-    send_buf[0] = 0xA; // BC_STATUS
-    i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, send_buf, 1, true);
-    i2c_read_error_handling(i2c0, MAX77958_SLAVE_P1, return_buf, 1, false);
-    uint8_t ChgType = return_buf[0] & 0b11;
+    uint8_t bc_status = 0;
+    max77958_read_bytes(0x0A, &bc_status, 1);
+    uint8_t ChgType = bc_status & 0b11;
     switch (ChgType){
 	case 0b000:
 	    rp2040_log("ChgTyp changed to nothing attached\n");
@@ -202,55 +562,78 @@ static void opcode_queue_add(int32_t (opcode_func)(), int32_t opcode_data){
 	rp2040_log("ERROR: opcode_queue is full");
 	assert(false);
     }
-    rp2040_log("Added to opcode_queue. %d entries remaining\n", queue_get_level(&opcode_queue));
+    rp2040_log("MAX77958_DIAG: opcode queue add func=%s data=0x%08" PRIx32 " queue=%u in_flight=%u INTB=%u\n",
+                opcode_func_name(opcode_func),
+                (uint32_t)opcode_data,
+                queue_get_level(&opcode_queue),
+                opcode_in_flight ? 1 : 0,
+                gpio_get(_gpio_interrupt));
 } 
 
 static int32_t parse_interrupt_vals(){
-    uint16_t return_val = 0;
-    get_interrupt_vals();
+    uint8_t UIC_INT;
+    uint8_t CC_INT;
+    uint8_t PD_INT;
+    uint8_t ACTION_INT;
+    read_interrupt_vals(&UIC_INT, &CC_INT, &PD_INT, &ACTION_INT);
     // don't really need these, but makes it easier to understand what each entry to the return_buf represents
-    uint8_t* UIC_INT = &return_buf[0]; 
-    uint8_t* CC_INT = &return_buf[1]; 
-    uint8_t* PD_INT = &return_buf[2]; 
-    // Check if the APCmdResI interrupt is on (AP command response pending)
-    uint8_t APCmdResI_mask = 1 << 7;
-    uint8_t PSRDYI_mask = 1 << 6;
-    uint8_t PDMsgI = 1 << 7;
-    uint8_t CCStat = 1 << 0;
-    uint8_t ChgType = 1 << 1;
-    uint8_t CCVcnStatI = 1 << 1;
-    uint8_t CCIStatI = 1 << 2;
-    uint8_t CCPinStatI = 1 << 3;
-    if (*UIC_INT & APCmdResI_mask){
+
+    rp2040_log("MAX77958_DIAG: parse_interrupt_vals trace_id=%" PRIu32 " INTB=%u UIC_INT=0x%02x CC_INT=0x%02x PD_INT=0x%02x ACTION_INT=0x%02x queue=%u irq_count=%" PRIu32 " irq_queue_full=%" PRIu32 " irq_test_queue_full=%" PRIu32 "\n",
+                opcode_trace_current_id,
+                gpio_get(_gpio_interrupt),
+                UIC_INT,
+                CC_INT,
+                PD_INT,
+                ACTION_INT,
+                queue_get_level(&opcode_queue),
+                max77958_irq_count,
+                max77958_irq_queue_full_count,
+                max77958_irq_test_queue_full_count);
+
+    return handle_interrupt_vals(UIC_INT, CC_INT, PD_INT);
+}
+
+static int32_t handle_interrupt_vals(uint8_t UIC_INT, uint8_t CC_INT, uint8_t PD_INT)
+{
+    uint16_t return_val = 0;
+
+    if (UIC_INT & MAX77958_UIC_INT_AP_CMD_RES){
 	on_opcode_cmd_response();
 	return_val |= 1 << 0;
     }
-    if (*PD_INT & PSRDYI_mask){
+    if (PD_INT & MAX77958_PD_INT_PS_RDY){
 	rp2040_log("Power source ready\n");
-	//on_power_source_ready();
+        if (init_config_pending) {
+            rp2040_log("MAX77958_DIAG: ignoring PSRDY action while init config is pending\n");
+        } else if (evaluate_current_role_state("PSRDY")) {
+            opcode_queue_pop();
+	}
 	return_val |= 1 << 1;
     }
-    if (*PD_INT & PDMsgI){
+    if (PD_INT & MAX77958_PD_INT_MSG){
 	on_pd_msg_received();
 	return_val |= 1 << 2;
     }
-    if (*UIC_INT & ChgType){
+    if (UIC_INT & MAX77958_UIC_INT_CHG_TYPE){
 	on_chgtype_change();
 	return_val |= 1 << 3;
     }
-    if (*CC_INT & CCStat){
+    if (CC_INT & MAX77958_CC_INT_CC_STAT){
 	on_ccstat_change();
+        if (!init_config_pending && evaluate_current_role_state("CCStat")) {
+            opcode_queue_pop();
+	}
 	return_val |= 1 << 4;
     }
-    if (*CC_INT & CCVcnStatI){
+    if (CC_INT & MAX77958_CC_INT_CCV_CN_STAT){
 	on_ccvcnstat_change();
 	return_val |= 1 << 5;
     }
-    if (*CC_INT & CCIStatI){
+    if (CC_INT & MAX77958_CC_INT_CCI_STAT){
 	on_ccistat_change();
 	return_val |= 1 << 6;
     }
-    if (*CC_INT & CCPinStatI){
+    if (CC_INT & MAX77958_CC_INT_CC_PIN_STAT){
 	on_ccpinstat_change();
 	return_val |= 1 << 7;
     }
@@ -258,7 +641,7 @@ static int32_t parse_interrupt_vals(){
 	test_max77958_interrupt_bool = true;
     }
     return return_val;
-    
+
     // Check for other relevant interrupts here and do something with that info...
 }
 
@@ -275,48 +658,49 @@ static void on_ccpinstat_change(){
 }
 
 static void get_interrupt_vals(){
-    memset(send_buf, 0, sizeof send_buf);
-    memset(return_buf, 0, sizeof return_buf);
-    send_buf[0] = REG_UIC_INT; // 0x04 Register
-    i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, send_buf, 1, true);
-    i2c_read_error_handling(i2c0, MAX77958_SLAVE_P1, return_buf, 4, false);
+    read_interrupt_vals(&return_buf[0], &return_buf[1], &return_buf[2], &return_buf[3]);
     //rp2040_log("interrupts vals: 0x4: 0x%02x, 0x5: 0x%02x, 0x6: 0x%02x, 0x7: 0x%02x\n", return_buf[0], return_buf[1], return_buf[2], return_buf[3]);
 }
 
+static void read_interrupt_vals(uint8_t *uic_int, uint8_t *cc_int, uint8_t *pd_int, uint8_t *action_int)
+{
+    uint8_t vals[4] = {0};
+    max77958_read_bytes(REG_UIC_INT, vals, sizeof vals);
+    *uic_int = vals[0];
+    *cc_int = vals[1];
+    *pd_int = vals[2];
+    *action_int = vals[3];
+}
+
 static void get_interrupt_masks(){
-    memset(send_buf, 0, sizeof send_buf);
-    memset(return_buf, 0, sizeof return_buf);
-    send_buf[0] = REG_UIC_INT_M; // 0x10 UIC_INT_M Register
-    i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, send_buf, 1, true);
-    i2c_read_error_handling(i2c0, MAX77958_SLAVE_P1, return_buf, 4, false);
+    max77958_read_bytes(REG_UIC_INT_M, return_buf, 4);
 }
 
 // Mask all interrupts for unit test purposes
 static void set_interrupt_masks_all_masked(){
-    memset(send_buf, 0, sizeof send_buf);
-    send_buf[0] = REG_UIC_INT_M; // 0x10 UIC_INT_M Register
-    send_buf[1] = 0b11111111; // UIC_INT_M 0x10 values
-    send_buf[2] = 0b11111111; // CC_INT_M 0x11 values
-    send_buf[3] = 0b11111111; // PD_INT_M 0x12 unmasking PSRDYI
-    i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, send_buf, 4, false);
+    uint8_t masks[] = {
+        REG_UIC_INT_M,
+        0b11111111, // UIC_INT_M 0x10 values
+        0b11111111, // CC_INT_M 0x11 values
+        0b11111111, // PD_INT_M 0x12 unmasking PSRDYI
+    };
+    max77958_write_bytes(masks, sizeof masks);
 }
 
 static void set_interrupt_masks(){
-    memset(send_buf, 0, sizeof send_buf);
-    send_buf[0] = REG_UIC_INT_M; // 0x10 UIC_INT_M Register
-    send_buf[1] = 0b00000100; // UIC_INT_M 0x10 values
-    send_buf[2] = 0b00000000; // CC_INT_M 0x11 values
-    send_buf[3] = 0b00111111; // PD_INT_M 0x12 unmasking PSRDYI
-    i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, send_buf, 4, false);
+    uint8_t masks[] = {
+        REG_UIC_INT_M,
+        0b00000100, // UIC_INT_M 0x10 values
+        0b00000000, // CC_INT_M 0x11 values
+        0b00111111, // PD_INT_M 0x12 unmasking PSRDYI
+    };
+    max77958_write_bytes(masks, sizeof masks);
 }
 
 void read_reg(uint8_t reg){
-    memset(send_buf, 0, sizeof send_buf);
-    memset(return_buf, 0, sizeof return_buf);
-    send_buf[0] = reg; 
-    i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, send_buf, 1, true);
-    i2c_read_error_handling(i2c0, MAX77958_SLAVE_P1, return_buf, 1, false);
-    rp2040_log("read_reg: 0x%02x: 0x%02x\n", reg, return_buf[0]);
+    uint8_t value = 0;
+    max77958_read_bytes(reg, &value, 1);
+    rp2040_log("read_reg: 0x%02x: 0x%02x\n", reg, value);
 }
 
 static int opcode_write(uint8_t *buf){
@@ -327,24 +711,61 @@ static int opcode_write(uint8_t *buf){
 	rp2040_log("ERROR: buffer should always start with the 0x21 register");
     }
 
+    if (!opcode_trace_func_entered) {
+        opcode_trace_mark_func_entry(opcode_func_name(opcode_trace_current_func), opcode_trace_current_data);
+    }
+    opcode_trace_write_started = true;
+    opcode_trace_write_done = false;
+    opcode_trace_cmd0 = buf[0];
+    opcode_trace_cmd1 = buf[1];
+    opcode_trace_cmd2 = buf[2];
+    opcode_trace_cmd3 = buf[3];
+    rp2040_log("MAX77958_DIAG: opcode trace id=%" PRIu32 " opcode_write start func=%s bytes=0x%02x/0x%02x/0x%02x/0x%02x INTB=%u\n",
+                opcode_trace_current_id,
+                opcode_func_name(opcode_trace_current_func),
+                opcode_trace_cmd0,
+                opcode_trace_cmd1,
+                opcode_trace_cmd2,
+                opcode_trace_cmd3,
+                gpio_get(_gpio_interrupt));
+    rp2040_log("MAX77958_DIAG: opcode trace id=%" PRIu32 " opcode_write data burst start len=%u INTB=%u\n",
+                opcode_trace_current_id,
+                (unsigned)sizeof(send_buf),
+                gpio_get(_gpio_interrupt));
+    max77958_i2c_lock();
     i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, buf, sizeof(send_buf), false);
+    rp2040_log("MAX77958_DIAG: opcode trace id=%" PRIu32 " opcode_write data burst done INTB=%u\n",
+                opcode_trace_current_id,
+                gpio_get(_gpio_interrupt));
     //rp2040_log("opcode_write: 0x%02x 0x%02x 0x%02x 0x%02x\n", buf[0], buf[1], buf[2], buf[3]);
 
     // For whatever reason, this is necessary for the interrupt to fire. Even though I already write 0x00 to it in the line above.
-    memset(send_buf, 0, sizeof &send_buf);
-    send_buf[0] = 0x41;
-    send_buf[1] = 0x00;
-    i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, send_buf, 2, false);
+    uint8_t latch_buf[2] = {0x41, 0x00};
+    rp2040_log("MAX77958_DIAG: opcode trace id=%" PRIu32 " opcode_write latch start bytes=0x%02x/0x%02x INTB=%u\n",
+                opcode_trace_current_id,
+                latch_buf[0],
+                latch_buf[1],
+                gpio_get(_gpio_interrupt));
+    i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, latch_buf, sizeof latch_buf, false);
+    max77958_i2c_unlock();
+    rp2040_log("MAX77958_DIAG: opcode trace id=%" PRIu32 " opcode_write latch done INTB=%u\n",
+                opcode_trace_current_id,
+                gpio_get(_gpio_interrupt));
+    opcode_trace_write_done = true;
+    rp2040_log("MAX77958_DIAG: opcode trace id=%" PRIu32 " opcode_write done func=%s INTB=%u\n",
+                opcode_trace_current_id,
+                opcode_func_name(opcode_trace_current_func),
+                gpio_get(_gpio_interrupt));
     return 1;
 }
 
 static void opcode_read(){
     // Set the current register pointer to 0x51 to you can read the return values from the OpCode Command
-    memset(send_buf, 0, sizeof send_buf);
-    send_buf[0] = OPCODE_READ_COMMAND;
-    i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, send_buf, 1, true);
-    i2c_read_error_handling(i2c0, MAX77958_SLAVE_P1, op_code_return_buf, 33, false);
+    max77958_read_bytes(OPCODE_READ_COMMAND, op_code_return_buf, 33);
     rp2040_log("opcode_read: 0x%02x 0x%02x 0x%02x 0x%02x\n", op_code_return_buf[0], op_code_return_buf[1], op_code_return_buf[2], op_code_return_buf[3]);
+    if (op_code_return_buf[0] == 0x0B) {
+        rp2040_log("CC_CTRL1 readback = 0x%02x\n", op_code_return_buf[1]);
+    }
     // Set breakpoint before clearing the registers via the following command. 
     // I'm commenting this out since I won't use the output in the code, but you can copy/paste this into gdb if you want to
     // inspect the results before clearing them
@@ -355,14 +776,89 @@ static void opcode_read(){
     //i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, return_buf, 32, false);
 }
 
+static bool service_pending_interrupt_snapshot(const char *context, bool log_snapshot)
+{
+    uint8_t uic_int;
+    uint8_t cc_int;
+    uint8_t pd_int;
+    uint8_t action_int;
+    read_interrupt_vals(&uic_int, &cc_int, &pd_int, &action_int);
+
+    if (log_snapshot) {
+        rp2040_log("MAX77958_DIAG: %s interrupt drain INTB=%u UIC_INT=0x%02x CC_INT=0x%02x PD_INT=0x%02x ACTION_INT=0x%02x opcode_queue=%u\n",
+                   context, gpio_get(_gpio_interrupt), uic_int, cc_int, pd_int, action_int,
+                   queue_get_level(&opcode_queue));
+    }
+
+    if (uic_int == 0 && cc_int == 0 && pd_int == 0 && action_int == 0) {
+        return false;
+    }
+
+    handle_interrupt_vals(uic_int, cc_int, pd_int);
+    return true;
+}
+
+static bool wait_for_opcode_response(const char *context, uint32_t timeout_ms)
+{
+    uint32_t waited_ms = 0;
+    uint32_t next_drain_ms = 0;
+    bool logged_intb_low = false;
+
+    while (!opcodes_finished && waited_ms < timeout_ms) {
+        if (gpio_get(_gpio_interrupt) == 0 && waited_ms >= next_drain_ms) {
+            if (!logged_intb_low) {
+                rp2040_log("MAX77958_DIAG: %s opcode wait saw INTB low; queueing interrupt drain\n", context);
+                logged_intb_low = true;
+            }
+            call_queue_try_add(&parse_interrupt_vals, 0);
+            next_drain_ms = waited_ms + MAX77958_OPCODE_WAIT_DRAIN_MS;
+        }
+
+        sleep_ms(MAX77958_OPCODE_WAIT_POLL_MS);
+        waited_ms += MAX77958_OPCODE_WAIT_POLL_MS;
+        max77958_poll_opcode_diagnostics();
+    }
+
+    if (opcodes_finished) {
+        return true;
+    }
+
+    rp2040_log("MAX77958_DIAG: %s opcode wait timed out after %" PRIu32 "ms; draining pending interrupts directly\n",
+               context, waited_ms);
+    if (opcode_in_flight && !opcode_trace_write_done) {
+        rp2040_log("MAX77958_DIAG: %s opcode wait cannot drain interrupts while opcode write is incomplete\n",
+                   context);
+        opcode_trace_log_timeout_once();
+        return false;
+    }
+
+    service_pending_interrupt_snapshot(context, true);
+
+    if (opcodes_finished) {
+        rp2040_log("MAX77958_DIAG: %s opcode wait recovered from pending interrupt drain\n", context);
+        return true;
+    }
+
+    rp2040_log("MAX77958_DIAG: %s opcode wait failed after pending interrupt drain\n", context);
+    return false;
+}
+
+bool max77958_wait_for_init_complete(void)
+{
+    if (wait_for_opcode_response("max77958_init", 3000)) {
+        rp2040_log("MAX77958_DIAG: init opcode queue finished\n");
+        return true;
+    }
+
+    rp2040_log("ERROR: MAX77958 init opcode queue did not finish\n");
+    return false;
+}
+
 static uint8_t max77958_read_register(uint8_t reg)
 {
-    memset(send_buf, 0, sizeof send_buf);
-    memset(return_buf, 0, sizeof return_buf);
-    send_buf[0] = reg;
-    i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, send_buf, 1, true);
-    i2c_read_error_handling(i2c0, MAX77958_SLAVE_P1, return_buf, 1, false);
-    return return_buf[0];
+    uint8_t value = 0;
+    max77958_read_bytes(reg, &value, 1);
+    return value;
 }
 
 void test_max77958_status_block_read_all(void)
@@ -397,18 +893,16 @@ void test_max77958_get_id(){
     rp2040_log("test_max77958_get_id started...\n");
     // Testing for just DEVICE_ID
     // Write the register 0x00 to set the pointer there before reading its value
-    memset(send_buf, 0, sizeof send_buf);
-    memset(return_buf, 0, sizeof return_buf);
-    i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, send_buf, 1, true);
-    i2c_read_error_handling(i2c0, MAX77958_SLAVE_P1, return_buf, 2, false);
-    if (return_buf[0] != 0x58){
+    uint8_t id[2] = {0};
+    max77958_read_bytes(0x00, id, sizeof id);
+    if (id[0] != 0x58){
 	rp2040_log("test_max77958_get_id ERROR: DEVICE_ID should be 0x58");
     }
-    if (return_buf[1] != 0x02){
+    if (id[1] != 0x02){
 	rp2040_log("test_max77958_get_id ERROR: DEVICE_REV should be 0x02");
     }
-    rp2040_log("test_max77958_get_id PASSED: DEVICE_ID = %x\n", return_buf[0]);
-    rp2040_log("test_max77958_get_id PASSED: DEVICE_REV = %x\n", return_buf[1]);
+    rp2040_log("test_max77958_get_id PASSED: DEVICE_ID = %x\n", id[0]);
+    rp2040_log("test_max77958_get_id PASSED: DEVICE_REV = %x\n", id[1]);
 }
 
 static int32_t bc_ctrl1_read(){
@@ -423,13 +917,8 @@ void test_max77958_bc_ctrl1_read(){
     rp2040_log("test_max77958_bc_ctrl1_read started...\n");
     opcode_queue_add(bc_ctrl1_read, 0);
     opcode_queue_pop();
-    int i = 0;
-    while (!opcodes_finished){
-	sleep_ms(100);
-	i++;
-	if (i > 10){
-	    rp2040_log("test_max77958_bc_ctrl1_read ERROR: Timed out waiting for GPIO to finish\n");
-	}
+    if (!wait_for_opcode_response("test_max77958_bc_ctrl1_read", MAX77958_OPCODE_WAIT_TIMEOUT_MS)) {
+        return;
     }
     if (op_code_return_buf[0] != 0x01){
 	rp2040_log("test_max77958_bc_ctrl1_read ERROR: OPCODE should be 0x01");
@@ -460,12 +949,8 @@ void test_max77958_bc_ctrl2_read(void)
     opcode_queue_add(bc_ctrl2_read, 0);
     opcode_queue_pop();
 
-    int i = 0;
-    while (!opcodes_finished) {
-        sleep_ms(100);
-        if (++i > 10) {
-            rp2040_log("test_max77958_bc_ctrl2_read ERROR: Timed out waiting for response\n");
-        }
+    if (!wait_for_opcode_response("test_max77958_bc_ctrl2_read", MAX77958_OPCODE_WAIT_TIMEOUT_MS)) {
+        return;
     }
 
     if (op_code_return_buf[0] != 0x03) {
@@ -500,12 +985,8 @@ void test_max77958_control1_read(void)
     opcode_queue_add(control1_read, 0);
     opcode_queue_pop();
 
-    int i = 0;
-    while (!opcodes_finished) {
-        sleep_ms(100);
-        if (++i > 10) {
-            rp2040_log("test_max77958_control1_read ERROR: Timed out waiting for response\n");
-        }
+    if (!wait_for_opcode_response("test_max77958_control1_read", MAX77958_OPCODE_WAIT_TIMEOUT_MS)) {
+        return;
     }
 
     if (op_code_return_buf[0] != 0x05) {
@@ -532,17 +1013,23 @@ static int32_t cc_ctrl1_read(){
     return 0;
 }
 
+static int32_t cc_ctrl1_write_snk_only(void)
+{
+    memset(send_buf, 0, sizeof send_buf);
+    send_buf[0] = OPCODE_WRITE;
+    send_buf[1] = 0x0C; // CC CTRL1 Config Write
+    send_buf[2] = 0x81; // VCONN auto, Try.SNK off, sink-only CC detection
+    rp2040_log("cc_ctrl1_write_snk_only: setting CC_CTRL1 to 0x81\n");
+    opcode_write(send_buf);
+    return 0;
+}
+
 void test_max77958_cc_ctrl1_read(){
     rp2040_log("test_max77958_cc_ctrl1_read started...\n");
     opcode_queue_add(cc_ctrl1_read, 0);
     opcode_queue_pop();
-    int i = 0;
-    while (!opcodes_finished){
-	sleep_ms(100);
-	i++;
-	if (i > 10){
-	    rp2040_log("test_max77958_cc_ctrl1_read ERROR: Timed out waiting for GPIO to finish\n");
-	}
+    if (!wait_for_opcode_response("test_max77958_cc_ctrl1_read", MAX77958_OPCODE_WAIT_TIMEOUT_MS)) {
+        return;
     }
     if (op_code_return_buf[0] != 0x0B){
 	rp2040_log("test_max77958_cc_ctrl1_read ERROR: OPCODE should be 0x0B");
@@ -574,12 +1061,8 @@ void test_max77958_cc_ctrl4_read(void)
     opcode_queue_add(cc_ctrl4_read, 0);
     opcode_queue_pop();
 
-    int i = 0;
-    while (!opcodes_finished) {
-        sleep_ms(100);
-        if (++i > 10) {
-            rp2040_log("test_max77958_cc_ctrl4_read ERROR: Timed out waiting for response\n");
-        }
+    if (!wait_for_opcode_response("test_max77958_cc_ctrl4_read", MAX77958_OPCODE_WAIT_TIMEOUT_MS)) {
+        return;
     }
 
     if (op_code_return_buf[0] != 0x11) {
@@ -613,12 +1096,8 @@ void test_max77958_gpio_control_read(void)
     opcode_queue_add(gpio_control_read, 0);
     opcode_queue_pop();
 
-    int i = 0;
-    while (!opcodes_finished) {
-        sleep_ms(100);
-        if (++i > 10) {
-            rp2040_log("test_max77958_gpio_control_read ERROR: Timed out waiting for response\n");
-        }
+    if (!wait_for_opcode_response("test_max77958_gpio_control_read", MAX77958_OPCODE_WAIT_TIMEOUT_MS)) {
+        return;
     }
 
     if (op_code_return_buf[0] != 0x23) {
@@ -673,12 +1152,8 @@ void test_max77958_gpio0_gpio1_adc_read(void)
     opcode_queue_add(gpio0_gpio1_adc_read, 0);
     opcode_queue_pop();
 
-    int i = 0;
-    while (!opcodes_finished) {
-        sleep_ms(100);
-        if (++i > 10) {
-            rp2040_log("test_max77958_gpio0_gpio1_adc_read ERROR: Timed out waiting for response\n");
-        }
+    if (!wait_for_opcode_response("test_max77958_gpio0_gpio1_adc_read", MAX77958_OPCODE_WAIT_TIMEOUT_MS)) {
+        return;
     }
 
     if (op_code_return_buf[0] != 0x27) {
@@ -725,12 +1200,8 @@ void test_max77958_snk_pdo_request(void)
     use_mtp_access = false;  // for RAM access
     opcode_queue_add(snk_pdo_request, 0);
     opcode_queue_pop();
-    int i = 0;
-    while (!opcodes_finished) {
-        sleep_ms(100);
-        if (++i > 10) {
-            rp2040_log("test_max77958_snk_pdo_request ERROR: Timed out waiting for MTP\n");
-        }
+    if (!wait_for_opcode_response("test_max77958_snk_pdo_request MTP", MAX77958_OPCODE_WAIT_TIMEOUT_MS)) {
+        return;
     }
     if (op_code_return_buf[0] != 0x3E) {
         rp2040_log("test_max77958_snk_pdo_request ERROR: OPCODE echo mismatch for MTP (got 0x%02x)\n",
@@ -751,12 +1222,8 @@ void test_max77958_snk_pdo_request(void)
     use_mtp_access = true;  // for RAM access
     opcode_queue_add(snk_pdo_request, 0);
     opcode_queue_pop();
-    i = 0;
-    while (!opcodes_finished) {
-        sleep_ms(100);
-        if (++i > 10) {
-            rp2040_log("test_max77958_snk_pdo_request ERROR: Timed out waiting for RAM\n");
-        }
+    if (!wait_for_opcode_response("test_max77958_snk_pdo_request RAM", MAX77958_OPCODE_WAIT_TIMEOUT_MS)) {
+        return;
     }
     if (op_code_return_buf[0] != 0x3E) {
         rp2040_log("test_max77958_snk_pdo_request ERROR: OPCODE echo mismatch for RAM (got 0x%02x)\n",
@@ -790,13 +1257,8 @@ void test_max77958_get_customer_config(){
     rp2040_log("test_max77958_get_customer_config started...\n");
     opcode_queue_add(customer_config_read, 0);
     opcode_queue_pop();
-    int i = 0;
-    while (!opcodes_finished){
-	sleep_ms(100);
-	i++;
-	if (i > 10){
-	    rp2040_log("test_max77958_get_customer_config ERROR: Timed out waiting for GPIO to finish\n");
-	}
+    if (!wait_for_opcode_response("test_max77958_get_customer_config", MAX77958_OPCODE_WAIT_TIMEOUT_MS)) {
+        return;
     }
     if (op_code_return_buf[0] != 0x55){
 	rp2040_log("test_max77958_get_customer_config ERROR: OPCODE should be 0x55");
@@ -884,17 +1346,21 @@ void max77958_init(uint gpio_interrupt, queue_t* cq, queue_t* rq){
     get_interrupt_vals();
 
     // Add all opcode commands in order to a queue. These will be called sequentially from core1 via the call_queue
-    // Set GPIO5 and GPIO4 to LOW
+    // Keep the phone charging path off by default. Data connectivity is the fail-safe priority.
     opcode_queue_add(gpio_set, gpio_bool_to_int32(false, false));
-    // Set GPIO5 to HIGH and GPIO4 to LOW
-    opcode_queue_add(gpio_set, gpio_bool_to_int32(false, true));
     opcode_queue_add(customer_config_write, 0);
+    opcode_queue_add(cc_ctrl1_write_snk_only, 0);
+    opcode_queue_add(cc_ctrl1_read, 0);
+    opcode_queue_add(swap_response_write, 0);
+#ifdef MAX77958_FORCE_VBUS_DIAGNOSTIC
+    opcode_queue_add(force_vbus_on_for_diagnostic, 0);
+#endif
     //opcode_queue_add(set_snk_pdos, 0);
     //opcode_queue_add(set_src_pdos, 0);
 
+    init_config_pending = true;
     opcode_queue_pop();
     rp2040_log("max77958 init finished\n");
-    on_ccstat_change();
 
 }
 
@@ -904,15 +1370,52 @@ void max77958_init(uint gpio_interrupt, queue_t* cq, queue_t* rq){
 // return false if opccode_queue was empty 
 static bool opcode_queue_pop(){
     queue_entry_t entry;
+    if (opcode_in_flight) {
+        rp2040_log("opcode_queue_pop: opcode already in flight\n");
+        return false;
+    }
     // if there is an entry in the opcode_queue, remove it and add it to the call_queue
     if (queue_try_remove(&opcode_queue, &entry)){
-	rp2040_log("Removed entry from opcode_queue. %d entries remaining\n", queue_get_level(&opcode_queue));
+        uint32_t trace_id = opcode_trace_next_id++;
+        uint32_t queue_level = queue_get_level(&opcode_queue);
+	rp2040_log("MAX77958_DIAG: opcode trace id=%" PRIu32 " dispatch func=%s data=0x%08" PRIx32 " queue_after_remove=%" PRIu32 " INTB=%u\n",
+                    trace_id,
+                    opcode_func_name(entry.func),
+                    (uint32_t)entry.data,
+                    queue_level,
+                    gpio_get(_gpio_interrupt));
+        opcode_in_flight = true;
+        opcode_trace_current_id = trace_id;
+        opcode_trace_current_func = entry.func;
+        opcode_trace_current_data = entry.data;
+        opcode_trace_dispatch_ms = to_ms_since_boot(get_absolute_time());
+        opcode_trace_func_entered = false;
+        opcode_trace_write_started = false;
+        opcode_trace_write_done = false;
+        opcode_trace_timeout_logged = false;
+        opcode_trace_cmd0 = 0;
+        opcode_trace_cmd1 = 0;
+        opcode_trace_cmd2 = 0;
+        opcode_trace_cmd3 = 0;
+
 	// if the call_queue is full, assert
 	if(queue_try_add(call_queue_ptr, &entry)){
-	    rp2040_log("added opcode entry to call_queue\n");
+            opcode_recovery_check_count = 0;
+            opcode_recovery_pending = false;
+	    rp2040_log("MAX77958_DIAG: opcode trace id=%" PRIu32 " added to call_queue func=%s queue=%u INTB=%u\n",
+                        opcode_trace_current_id,
+                        opcode_func_name(opcode_trace_current_func),
+                        queue_get_level(&opcode_queue),
+                        gpio_get(_gpio_interrupt));
+            schedule_opcode_recovery_check();
 	    return true;
 	}else{
-	    rp2040_log("ERROR: opcode_queue_pop: call_queue full\n");
+            opcode_in_flight = false;
+            opcode_trace_current_id = 0;
+            opcode_trace_current_func = NULL;
+	    rp2040_log("ERROR: opcode_queue_pop: call_queue full for trace id=%" PRIu32 " func=%s\n",
+                        trace_id,
+                        opcode_func_name(entry.func));
 	    return false;
 	}
     }
@@ -924,6 +1427,7 @@ static bool opcode_queue_pop(){
 }
 
 static int32_t customer_config_write(){
+    opcode_trace_mark_func_entry("customer_config_write", 0);
     memset(send_buf, 0, sizeof send_buf);
     send_buf[0] = OPCODE_WRITE;
     send_buf[1] = 0x56; // Customer Configuration Write
@@ -934,7 +1438,7 @@ static int32_t customer_config_write(){
         .dbg_snk_enable = false, 
         .audio_acc_enable = false,
         .trysnk_enable = false,
-	.typec_mode = TYPEC_MODE_DRP,
+	.typec_mode = TYPEC_MODE_SNK,
         .mem_update_customer = false,  // Update RAM only
         .moisture_enable = false
     };
@@ -952,8 +1456,12 @@ static int32_t customer_config_write(){
     send_buf[7] = 0x00; // RSVD
     send_buf[8] = 0x64; // default SRC_PDO_V
     send_buf[9] = 0x00; // default SRC_PDO_V of 5.0V (0x64= 100, and 50mA*100).
-    send_buf[10] = 0x32; // SRC_PDO_MaxI
-    send_buf[11] = 0x00; // SRC_PDO_MaxI = 1.0A (0x64=100, and 100*10mA)
+    send_buf[10] = 0x96; // SRC_PDO_MaxI
+    send_buf[11] = 0x00; // SRC_PDO_MaxI = 1.5A (0x96=150, and 150*10mA)
+    send_buf[21] = 0x69; // SID1 default
+    send_buf[22] = 0x69; // SID2 default
+    send_buf[23] = 0x35; // SID3 default
+    send_buf[24] = 0x28; // SID4 default
     opcode_write(send_buf);
     return 0;
 }
@@ -1007,6 +1515,7 @@ static int32_t gpio_bool_to_int32(bool _GPIO4, bool _GPIO5){
 
 // A function to set the GPIO of the max77958 taking as input two bool values setting GPIO4 and GPIO5
 static int32_t gpio_set(int32_t gpio_val){
+    opcode_trace_mark_func_entry("gpio_set", gpio_val);
     memset(send_buf, 0, sizeof send_buf);
     send_buf[0] = OPCODE_WRITE;
     send_buf[1] = OPCODE_SET_GPIO; 
@@ -1016,12 +1525,412 @@ static int32_t gpio_set(int32_t gpio_val){
     return 0;
 }
 
-static void power_swap_request(){
+static int32_t power_swap_request(void)
+{
+    opcode_trace_mark_func_entry("power_swap_request", 0);
     memset(send_buf, 0, sizeof send_buf);
     send_buf[0] = OPCODE_WRITE;
-    send_buf[1] = 0x37; // Send Swap Request 
-    send_buf[2] = 0x02; // PR SWAP
+    send_buf[1] = OPCODE_SWAP_REQ;
+    send_buf[2] = MAX77958_SWAP_REQ_PR_SWAP;
+    rp2040_log("MAX77958_DIAG: requesting PR_SWAP to source phone power\n");
     opcode_write(send_buf);
+    return 0;
+}
+
+static int32_t swap_response_write(void)
+{
+    opcode_trace_mark_func_entry("swap_response_write", 0);
+    memset(send_buf, 0, sizeof send_buf);
+    send_buf[0] = OPCODE_WRITE;
+    send_buf[1] = OPCODE_SWAP_RESP;
+    send_buf[2] = MAX77958_SWAP_RESP_SOURCE_UFP;
+    rp2040_log("MAX77958_DIAG: setting swap response power=Source data=UFP config=0x%02x\n",
+                send_buf[2]);
+    opcode_write(send_buf);
+    return 0;
+}
+
+static int32_t data_role_swap_request(void)
+{
+    opcode_trace_mark_func_entry("data_role_swap_request", 0);
+    memset(send_buf, 0, sizeof send_buf);
+    send_buf[0] = OPCODE_WRITE;
+    send_buf[1] = OPCODE_SWAP_REQ;
+    send_buf[2] = MAX77958_SWAP_REQ_DR_SWAP;
+    rp2040_log("MAX77958_DIAG: requesting DR_SWAP to make robot UFP/device\n");
+    opcode_write(send_buf);
+    return 0;
+}
+
+static bool evaluate_current_role_state(const char *reason)
+{
+    if (init_config_pending) {
+        rp2040_log("MAX77958_DIAG: state evaluation deferred for %s; init config still pending\n",
+                    reason);
+        return false;
+    }
+
+    max77958_role_state_t state = max77958_read_role_state();
+    log_role_state("state eval", reason, &state);
+
+    if (!state.attached) {
+        rp2040_log("MAX77958_DIAG: role case: not attached or not in a usable attached state\n");
+        power_role_swap_request_count = 0;
+        source_dfp_not_ready_recheck_count = 0;
+        post_prswap_vbus_recheck_count = 0;
+        vbus_turn_off();
+        return false;
+    }
+
+    if (state.pcb_power == MAX77958_PCB_POWER_SINK) {
+        source_dfp_not_ready_recheck_count = 0;
+        if (!state.pd_ready) {
+            rp2040_log("MAX77958_DIAG: role case: pcb_power=SINK; waiting for PD ready\n");
+            return false;
+        }
+
+        if (state.pcb_data == MAX77958_PCB_DATA_DFP_HOST) {
+            rp2040_log("MAX77958_DIAG: role case: pcb_power=SINK pcb_data=DFP_HOST; requesting DR_SWAP\n");
+            return queue_data_role_swap_to_ufp_if_ready(reason);
+        }
+
+        rp2040_log("MAX77958_DIAG: role case: pcb_power=SINK pcb_data=UFP_DEVICE; requesting PR_SWAP\n");
+        return queue_power_role_swap_to_source_if_ready(reason);
+    }
+
+    if (state.pcb_power == MAX77958_PCB_POWER_SOURCE) {
+        power_role_swap_request_count = 0;
+        if (state.pcb_data == MAX77958_PCB_DATA_DFP_HOST) {
+            if (!state.pd_ready) {
+                rp2040_log("MAX77958_DIAG: role case: pcb_power=SOURCE pcb_data=DFP_HOST; waiting for PD ready before DR_SWAP\n");
+                vbus_turn_on();
+                schedule_delayed_role_recheck(MAX77958_RECHECK_SOURCE_DFP_NOT_READY);
+                return false;
+            }
+
+            source_dfp_not_ready_recheck_count = 0;
+            rp2040_log("MAX77958_DIAG: role case: pcb_power=SOURCE pcb_data=DFP_HOST; enabling VBUS and requesting DR_SWAP\n");
+            vbus_turn_on();
+            return queue_data_role_swap_to_ufp_if_ready(reason);
+        }
+
+        source_dfp_not_ready_recheck_count = 0;
+        rp2040_log("MAX77958_DIAG: role case: pcb_power=SOURCE pcb_data=UFP_DEVICE; ensuring VBUS on\n");
+        vbus_turn_on();
+        return false;
+    }
+
+    return false;
+}
+
+void max77958_on_start_complete(void)
+{
+    call_queue_try_add(&start_complete_role_check, 0);
+}
+
+static int32_t start_complete_role_check(int32_t unused)
+{
+    (void)unused;
+    evaluate_current_role_state("post on_start complete");
+    return 0;
+}
+
+static bool queue_power_role_swap_to_source_if_ready(const char *reason)
+{
+    if (init_config_pending) {
+        rp2040_log("MAX77958_DIAG: PR_SWAP deferred for %s; init config still pending\n", reason);
+        return false;
+    }
+
+    max77958_role_state_t state = max77958_read_role_state();
+    log_role_state("PR_SWAP check", reason, &state);
+    rp2040_log("MAX77958_DIAG: PR_SWAP retry=%u/%u\n",
+                power_role_swap_request_count, MAX77958_PR_SWAP_MAX_RETRIES);
+
+    if (state.pcb_power == MAX77958_PCB_POWER_SOURCE) {
+        power_role_swap_request_count = 0;
+        return false;
+    }
+
+    if (state.pcb_power != MAX77958_PCB_POWER_SINK ||
+        state.pcb_data != MAX77958_PCB_DATA_UFP_DEVICE ||
+        !state.pd_ready) {
+        return false;
+    }
+
+    if (power_role_swap_request_count >= MAX77958_PR_SWAP_MAX_RETRIES) {
+        rp2040_log("MAX77958_DIAG: PR_SWAP retry exhausted; staying sink/UFP for Android host compatibility\n");
+        return false;
+    }
+
+    power_role_swap_request_count++;
+    opcode_queue_add(power_swap_request, 0);
+    return true;
+}
+
+static bool queue_data_role_swap_to_ufp_if_ready(const char *reason)
+{
+    if (data_role_swap_requested) {
+        return false;
+    }
+
+    max77958_role_state_t state = max77958_read_role_state();
+    log_role_state("DR_SWAP check", reason, &state);
+
+    if (!state.attached ||
+        state.pcb_data != MAX77958_PCB_DATA_DFP_HOST ||
+        !state.pd_ready) {
+        return false;
+    }
+
+    if (data_role_swap_request_count >= MAX77958_DR_SWAP_MAX_RETRIES) {
+        rp2040_log("MAX77958_DIAG: DR_SWAP retry exhausted; staying in current data role\n");
+        return false;
+    }
+
+    data_role_swap_request_count++;
+    data_role_swap_requested = true;
+    opcode_queue_add(data_role_swap_request, 0);
+    return true;
+}
+
+static bool queue_vbus_on_after_pr_swap_if_source_attached(void)
+{
+    max77958_role_state_t state = max77958_read_role_state();
+
+    log_role_state("post PR_SWAP VBUS check", "PR_SWAP", &state);
+    rp2040_log("MAX77958_DIAG: post PR_SWAP VBUS requested=%u\n",
+                vbus_enable_requested ? 1 : 0);
+
+    if (vbus_enable_requested) {
+        post_prswap_vbus_recheck_count = 0;
+        rp2040_log("MAX77958_DIAG: post PR_SWAP VBUS already requested; stopping recheck\n");
+        return true;
+    }
+
+    if (state.pcb_power != MAX77958_PCB_POWER_SOURCE) {
+        return false;
+    }
+
+    rp2040_log("MAX77958_DIAG: post PR_SWAP source attached; enabling VBUS GPIO4/GPIO5\n");
+    vbus_turn_on();
+    return true;
+}
+
+static int64_t opcode_recovery_alarm(alarm_id_t id, void *user_data)
+{
+    (void)id;
+    (void)user_data;
+    queue_entry_t entry = {opcode_recovery_check, 0};
+
+    if (call_queue_ptr == NULL || !queue_try_add(call_queue_ptr, &entry)) {
+        opcode_recovery_pending = false;
+        opcode_recovery_queue_full_count++;
+    }
+
+    return 0;
+}
+
+static void schedule_opcode_recovery_check(void)
+{
+    if (!opcode_in_flight || opcode_recovery_pending) {
+        return;
+    }
+
+    if (opcode_recovery_check_count >= MAX77958_OPCODE_RECOVERY_MAX_CHECKS) {
+        rp2040_log("MAX77958_DIAG: opcode recovery exhausted in_flight=%u queue=%u\n",
+                    opcode_in_flight ? 1 : 0, queue_get_level(&opcode_queue));
+        opcode_trace_log_timeout_classification();
+        return;
+    }
+
+    opcode_recovery_check_count++;
+    opcode_recovery_pending = true;
+    rp2040_log("MAX77958_DIAG: scheduling opcode recovery check count=%u/%u delay_ms=%u recovery_queue_full=%" PRIu32 "\n",
+                opcode_recovery_check_count,
+                MAX77958_OPCODE_RECOVERY_MAX_CHECKS,
+                MAX77958_OPCODE_RECOVERY_DELAY_MS,
+                opcode_recovery_queue_full_count);
+    if (add_alarm_in_ms(MAX77958_OPCODE_RECOVERY_DELAY_MS,
+                        opcode_recovery_alarm,
+                        NULL,
+                        false) < 0) {
+        opcode_recovery_pending = false;
+        rp2040_log("MAX77958_DIAG: failed to schedule opcode recovery check\n");
+    }
+}
+
+static int32_t opcode_recovery_check(int32_t unused)
+{
+    (void)unused;
+    uint8_t uic_int;
+    uint8_t cc_int;
+    uint8_t pd_int;
+    uint8_t action_int;
+    opcode_recovery_pending = false;
+
+    if (!opcode_in_flight) {
+        opcode_recovery_check_count = 0;
+        return 0;
+    }
+
+    read_interrupt_vals(&uic_int, &cc_int, &pd_int, &action_int);
+    rp2040_log("MAX77958_DIAG: opcode recovery drain trace_id=%" PRIu32 " count=%u/%u INTB=%u UIC_INT=0x%02x CC_INT=0x%02x PD_INT=0x%02x ACTION_INT=0x%02x queue=%u\n",
+                opcode_trace_current_id,
+                opcode_recovery_check_count,
+                MAX77958_OPCODE_RECOVERY_MAX_CHECKS,
+                gpio_get(_gpio_interrupt),
+                uic_int,
+                cc_int,
+                pd_int,
+                action_int,
+                queue_get_level(&opcode_queue));
+
+    if (uic_int == 0 && cc_int == 0 && pd_int == 0 && action_int == 0) {
+        schedule_opcode_recovery_check();
+        return 0;
+    }
+
+    if (uic_int & MAX77958_UIC_INT_AP_CMD_RES) {
+        rp2040_log("MAX77958_DIAG: opcode recovery found pending AP_CMD_RES trace_id=%" PRIu32 "\n",
+                    opcode_trace_current_id);
+    }
+
+    handle_interrupt_vals(uic_int, cc_int, pd_int);
+
+    if (opcode_in_flight) {
+        schedule_opcode_recovery_check();
+    }
+
+    return 0;
+}
+
+static int64_t delayed_role_recheck_alarm(alarm_id_t id, void *user_data)
+{
+    (void)id;
+    int32_t reason = (int32_t)(intptr_t)user_data;
+    queue_entry_t entry = {delayed_role_recheck, reason};
+
+    if (call_queue_ptr == NULL || !queue_try_add(call_queue_ptr, &entry)) {
+        switch (reason) {
+            case MAX77958_RECHECK_SOURCE_DFP_NOT_READY:
+                source_dfp_not_ready_recheck_pending = false;
+                break;
+            case MAX77958_RECHECK_POST_PRSWAP_VBUS:
+                post_prswap_vbus_recheck_pending = false;
+                break;
+            default:
+                break;
+        }
+        delayed_role_recheck_queue_full_count++;
+    }
+
+    return 0;
+}
+
+static void schedule_delayed_role_recheck(int32_t reason)
+{
+    bool *pending = NULL;
+    uint8_t *count = NULL;
+    uint8_t max_rechecks = 0;
+    const char *name = "unknown";
+
+    switch (reason) {
+        case MAX77958_RECHECK_SOURCE_DFP_NOT_READY:
+            pending = &source_dfp_not_ready_recheck_pending;
+            count = &source_dfp_not_ready_recheck_count;
+            max_rechecks = MAX77958_SOURCE_DFP_NOT_READY_MAX_RECHECKS;
+            name = "SOURCE_DFP_NOT_READY";
+            break;
+        case MAX77958_RECHECK_POST_PRSWAP_VBUS:
+            pending = &post_prswap_vbus_recheck_pending;
+            count = &post_prswap_vbus_recheck_count;
+            max_rechecks = MAX77958_POST_PRSWAP_VBUS_MAX_RECHECKS;
+            name = "POST_PRSWAP_VBUS";
+            break;
+        default:
+            rp2040_log("MAX77958_DIAG: unknown delayed role recheck reason=%d\n", reason);
+            return;
+    }
+
+    if (*pending) {
+        return;
+    }
+
+    if (*count >= max_rechecks) {
+        rp2040_log("MAX77958_DIAG: delayed role recheck exhausted reason=%s count=%u/%u\n",
+                    name, *count, max_rechecks);
+        return;
+    }
+
+    (*count)++;
+    *pending = true;
+    rp2040_log("MAX77958_DIAG: scheduling delayed role recheck reason=%s count=%u/%u delay_ms=%u delayed_queue_full=%" PRIu32 "\n",
+                name, *count, max_rechecks, MAX77958_ROLE_RECHECK_DELAY_MS,
+                delayed_role_recheck_queue_full_count);
+    if (add_alarm_in_ms(MAX77958_ROLE_RECHECK_DELAY_MS,
+                        delayed_role_recheck_alarm,
+                        (void *)(intptr_t)reason,
+                        false) < 0) {
+        *pending = false;
+        rp2040_log("MAX77958_DIAG: failed to schedule delayed role recheck reason=%s\n", name);
+    }
+}
+
+static int32_t delayed_role_recheck(int32_t reason)
+{
+    switch (reason) {
+        case MAX77958_RECHECK_SOURCE_DFP_NOT_READY:
+            source_dfp_not_ready_recheck_pending = false;
+            if (evaluate_current_role_state("delayed SOURCE/DFP wait")) {
+                opcode_queue_pop();
+            }
+            break;
+        case MAX77958_RECHECK_POST_PRSWAP_VBUS:
+            post_prswap_vbus_recheck_pending = false;
+            if (queue_vbus_on_after_pr_swap_if_source_attached()) {
+                post_prswap_vbus_recheck_count = 0;
+                break;
+            }
+            schedule_delayed_role_recheck(MAX77958_RECHECK_POST_PRSWAP_VBUS);
+            break;
+        default:
+            rp2040_log("MAX77958_DIAG: delayed role recheck unknown reason=%d\n", reason);
+            break;
+    }
+
+    return 0;
+}
+
+static bool queue_data_role_swap_to_ufp_once(void)
+{
+    if (data_role_swap_requested) {
+        return false;
+    }
+
+    max77958_role_state_t state = max77958_read_role_state();
+    log_role_state("DR_SWAP check", "VBUS on", &state);
+
+    if (state.pcb_power != MAX77958_PCB_POWER_SOURCE || !state.pd_ready) {
+        return false;
+    }
+
+    if (state.pcb_data != MAX77958_PCB_DATA_DFP_HOST) {
+	rp2040_log("MAX77958_DIAG: data role already UFP/device\n");
+        data_role_swap_requested = true;
+        data_role_swap_request_count = 0;
+        return false;
+    }
+
+    if (data_role_swap_request_count >= MAX77958_DR_SWAP_MAX_RETRIES) {
+        rp2040_log("MAX77958_DIAG: DR_SWAP retry exhausted; staying in current data role\n");
+        return false;
+    }
+
+    data_role_swap_request_count++;
+    data_role_swap_requested = true;
+    opcode_queue_add(data_role_swap_request, 0);
+    return true;
 }
 
 static int32_t set_src_pdos(){
@@ -1101,24 +2010,51 @@ static int32_t set_snk_pdos(){
 }
 
 static void vbus_turn_off(){
-    opcode_queue_add(&gpio_set, gpio_bool_to_int32(false, true));
+#ifdef MAX77958_FORCE_VBUS_DIAGNOSTIC
+    rp2040_log("MAX77958_DIAG: forced VBUS mode ignoring vbus_turn_off\n");
+    return;
+#endif
+    rp2040_log("MAX77958_DIAG: setting VBUS GPIO4/GPIO5 off\n");
+    data_role_swap_requested = false;
+    data_role_swap_request_count = 0;
+    vbus_enable_requested = false;
+    opcode_queue_add(&gpio_set, gpio_bool_to_int32(false, false));
     opcode_queue_pop();
 }
 
+#ifdef MAX77958_FORCE_VBUS_DIAGNOSTIC
+static int32_t force_vbus_on_for_diagnostic(void)
+{
+    opcode_trace_mark_func_entry("force_vbus_on_for_diagnostic", 0);
+    rp2040_log("MAX77958_DIAG: forcing GPIO4/GPIO5 high for VBUS diagnostic\n");
+    return gpio_set(gpio_bool_to_int32(true, true));
+}
+#endif
+
 static void vbus_turn_on(){
+    rp2040_log("MAX77958_DIAG: setting VBUS GPIO4/GPIO5 on\n");
+    vbus_enable_requested = true;
     opcode_queue_add(&gpio_set, gpio_bool_to_int32(true, true));
+    queue_data_role_swap_to_ufp_once();
     opcode_queue_pop();
 }
 
 static int32_t pd_msg_response(){
     // Read the 0xE PD_STATUS0 register as it contains the PD message Type recieved 
-    memset(send_buf, 0, sizeof send_buf);
-    memset(return_buf, 0, sizeof return_buf);
-    send_buf[0] = REG_PD_STATUS0; // 0xE PD_STATUS0 Register 
-    i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, send_buf, 1, true);
-    i2c_read_error_handling(i2c0, MAX77958_SLAVE_P1, return_buf, 1, false);
-    rp2040_log("PD_STATUS0: 0x%02x\n", return_buf[0]);
-    switch (return_buf[0]){
+    uint8_t pd_status0 = 0;
+    max77958_read_bytes(REG_PD_STATUS0, &pd_status0, 1);
+    rp2040_log("PD_STATUS0: 0x%02x\n", pd_status0);
+    switch (pd_status0){
+        case PDMSG_DR_SWAP_REQ_RECEIVED:
+	    rp2040_log("PD Message: DR_SWAP_REQ_RECEIVED\n");
+	    break;
+        case PDMSG_REJECT_RECEIVED:
+	    rp2040_log("PD Message: REJECT_RECEIVED\n");
+            data_role_swap_requested = false;
+            if (evaluate_current_role_state("PD reject")) {
+                opcode_queue_pop();
+            }
+	    break;
         case PDMSG_PRSWAP_SRCTOSWAP:
 	    rp2040_log("PD Message: PRSWAP_SRCTOSWAP\n");
 	    break;
@@ -1128,10 +2064,19 @@ static int32_t pd_msg_response(){
 	    break;
 	case PDMSG_PRSWAP_SNKTOSWAP:
 	    rp2040_log("PD Message: PRSWAP_SNKTOSWAP\n");
+            schedule_delayed_role_recheck(MAX77958_RECHECK_POST_PRSWAP_VBUS);
 	    break;
 	case PDMSG_PRSWAP_SWAPTOSRC:
 	    rp2040_log("PD Message: PRSWAP_SWAPTOSRC\n");
 	    vbus_turn_on();
+	    break;
+	case PDMSG_POWER_SUPPLY_VBUS_ENABLE:
+	    rp2040_log("PD Message: PowerSupply VbusEnable\n");
+	    vbus_turn_on();
+	    break;
+	case PDMSG_POWER_SUPPLY_VBUS_DISABLE:
+	    rp2040_log("PD Message: PowerSupply VbusDisable\n");
+	    vbus_turn_off();
 	    break;
 	case PDMSG_VDM_NAK_RECEIVED:
 	    rp2040_log("PD Message: VDM_NAK Received\n");
@@ -1152,12 +2097,7 @@ static int32_t pd_msg_response(){
 void max77958_shutdown(uint gpio_interrupt){
     opcode_queue_add(gpio_set, gpio_bool_to_int32(false, false));
     opcode_queue_pop();
-    int i = 0;
-    while (!opcodes_finished){
-	sleep_ms(100);
-	i++;
-	if (i > 10){
-	    rp2040_log("ERROR: Timed out waiting for GPIO to finish\n");
-	}
+    if (!wait_for_opcode_response("max77958_shutdown", MAX77958_OPCODE_WAIT_TIMEOUT_MS)) {
+        rp2040_log("ERROR: max77958_shutdown timed out waiting for VBUS GPIO command\n");
     }
 }

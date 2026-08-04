@@ -59,6 +59,47 @@ Flash the firmware to the device:
 make flash
 ```
 
+## Logging and Diagnostics
+Firmware logging defaults to the USB CDC interface:
+```bash
+make firmware LOGGER=USB
+```
+
+To route firmware logs over the debug-probe UART instead, build with:
+```bash
+make firmware LOGGER=UART
+make flash
+```
+
+UART logs can be captured from the host with:
+```bash
+tools/capture_uart_log.py --flash --timeout 15
+```
+
+Use a longer `--timeout` when you need the log to include normal startup plus manual detach/reattach cycles.
+
+For phone charging plus Android-side motor control, the desired MAX77958 diagnostic state is:
+```text
+pcb_power=SOURCE pcb_data=UFP_DEVICE pd_ready=yes vbus_enabled=yes
+desired phone-control state: yes
+```
+
+In raw `PD1` logs, `data=0` means the robot/RP2040 is the USB device (`UFP`) and Android is the USB host (`DFP`), which is required for Android to discover the RP2040 USB serial interface. The board-relative `pcb_power=SOURCE` state and GPIO4/GPIO5 VBUS enable indicate that the robot is charging the phone.
+
+For isolated MAX77958 prototype testing, build the external I2C1 diagnostic firmware with:
+```bash
+make firmware LOGGER=UART EXTERNAL_MAX77958_TEST=1
+make flash
+tools/capture_uart_log.py --flash --timeout 15
+```
+
+`EXTERNAL_MAX77958_TEST=1` skips normal board bring-up and probes an external MAX77958 on I2C1. Leave it unset, or set it to `0`, for normal firmware:
+```bash
+make firmware LOGGER=UART
+```
+
+Forced VBUS diagnostics are disabled by default. To intentionally force MAX77958 GPIO4/GPIO5 high during bring-up, build with `MAX77958_FORCE_VBUS_DIAGNOSTIC=1`.
+
 ## Debugging the Firmware
 Debugging is a two-step process:
 
