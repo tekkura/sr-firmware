@@ -69,6 +69,7 @@ static volatile uint32_t opcode_trace_dispatch_ms = 0;
 static volatile bool opcode_trace_func_entered = false;
 static volatile bool opcode_trace_write_started = false;
 static volatile bool opcode_trace_write_done = false;
+static volatile bool opcode_trace_timeout_logged = false;
 static volatile uint8_t opcode_trace_cmd0 = 0;
 static volatile uint8_t opcode_trace_cmd1 = 0;
 static volatile uint8_t opcode_trace_cmd2 = 0;
@@ -352,6 +353,21 @@ void max77958_on_interrupt(uint gpio, uint32_t event_mask){
             call_queue_try_add(&max77958_test_response, 1);
         }
     }
+}
+
+void max77958_poll_opcode_diagnostics(void)
+{
+    if (!opcode_in_flight || opcode_trace_timeout_logged) {
+        return;
+    }
+
+    uint32_t age_ms = to_ms_since_boot(get_absolute_time()) - opcode_trace_dispatch_ms;
+    if (age_ms < MAX77958_OPCODE_WAIT_TIMEOUT_MS) {
+        return;
+    }
+
+    opcode_trace_timeout_logged = true;
+    opcode_trace_log_timeout_classification();
 }
 
 static int on_pd_msg_received(){
@@ -1313,6 +1329,7 @@ static bool opcode_queue_pop(){
         opcode_trace_func_entered = false;
         opcode_trace_write_started = false;
         opcode_trace_write_done = false;
+        opcode_trace_timeout_logged = false;
         opcode_trace_cmd0 = 0;
         opcode_trace_cmd1 = 0;
         opcode_trace_cmd2 = 0;

@@ -172,6 +172,9 @@ int main(){
     sleep_ms(1000);
     while (true){
         get_block();
+#ifndef BOARD_PICO
+        max77958_poll_opcode_diagnostics();
+#endif
 	if (shutdown){
 	    on_shutdown();
 	    break;

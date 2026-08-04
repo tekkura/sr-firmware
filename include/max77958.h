@@ -67,6 +67,7 @@ void max77958_init(uint gpio_interrupt, queue_t* call_queue, queue_t* results_qu
 void max77958_shutdown(uint gpio_interrupt);
 void max77958_on_interrupt(uint gpio, uint32_t event_mask);
 void max77958_on_start_complete(void);
+void max77958_poll_opcode_diagnostics(void);
 void test_max77958_status_block_read_all(void);
 void test_max77958_get_id();
 void test_max77958_bc_ctrl1_read();
