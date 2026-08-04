@@ -48,7 +48,7 @@ static queue_t* call_queue_ptr;
 static queue_t* return_queue_ptr;
 static bool opcode_cmd_finished = false;
 static bool power_swap_enabled = true;
-static bool opcodes_finished = false;
+static volatile bool opcodes_finished = false;
 static volatile bool opcode_in_flight = false;
 static bool data_role_swap_requested = false;
 static bool init_config_pending = false;
