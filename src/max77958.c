@@ -82,6 +82,8 @@ static bool test_max77958_started = false;
 static bool test_max77958_completed = false;
 static volatile uint32_t max77958_irq_count = 0;
 static volatile uint32_t max77958_irq_queue_full_count = 0;
+static volatile uint32_t opcode_recovery_queue_full_count = 0;
+static volatile uint32_t delayed_role_recheck_queue_full_count = 0;
 
 static int32_t parse_interrupt_vals();
 static int32_t handle_interrupt_vals(uint8_t uic_int, uint8_t cc_int, uint8_t pd_int);
@@ -1703,7 +1705,7 @@ static int64_t opcode_recovery_alarm(alarm_id_t id, void *user_data)
 
     if (call_queue_ptr == NULL || !queue_try_add(call_queue_ptr, &entry)) {
         opcode_recovery_pending = false;
-        rp2040_log("MAX77958_DIAG: failed to queue opcode recovery check\n");
+        opcode_recovery_queue_full_count++;
     }
 
     return 0;
@@ -1724,10 +1726,11 @@ static void schedule_opcode_recovery_check(void)
 
     opcode_recovery_check_count++;
     opcode_recovery_pending = true;
-    rp2040_log("MAX77958_DIAG: scheduling opcode recovery check count=%u/%u delay_ms=%u\n",
+    rp2040_log("MAX77958_DIAG: scheduling opcode recovery check count=%u/%u delay_ms=%u recovery_queue_full=%" PRIu32 "\n",
                 opcode_recovery_check_count,
                 MAX77958_OPCODE_RECOVERY_MAX_CHECKS,
-                MAX77958_OPCODE_RECOVERY_DELAY_MS);
+                MAX77958_OPCODE_RECOVERY_DELAY_MS,
+                opcode_recovery_queue_full_count);
     if (add_alarm_in_ms(MAX77958_OPCODE_RECOVERY_DELAY_MS,
                         opcode_recovery_alarm,
                         NULL,
@@ -1803,7 +1806,7 @@ static int64_t delayed_role_recheck_alarm(alarm_id_t id, void *user_data)
             default:
                 break;
         }
-        rp2040_log("MAX77958_DIAG: failed to queue delayed role recheck reason=%d\n", reason);
+        delayed_role_recheck_queue_full_count++;
     }
 
     return 0;
@@ -1846,8 +1849,9 @@ static void schedule_delayed_role_recheck(int32_t reason)
 
     (*count)++;
     *pending = true;
-    rp2040_log("MAX77958_DIAG: scheduling delayed role recheck reason=%s count=%u/%u delay_ms=%u\n",
-                name, *count, max_rechecks, MAX77958_ROLE_RECHECK_DELAY_MS);
+    rp2040_log("MAX77958_DIAG: scheduling delayed role recheck reason=%s count=%u/%u delay_ms=%u delayed_queue_full=%" PRIu32 "\n",
+                name, *count, max_rechecks, MAX77958_ROLE_RECHECK_DELAY_MS,
+                delayed_role_recheck_queue_full_count);
     if (add_alarm_in_ms(MAX77958_ROLE_RECHECK_DELAY_MS,
                         delayed_role_recheck_alarm,
                         (void *)(intptr_t)reason,
