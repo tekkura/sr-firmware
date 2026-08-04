@@ -11,6 +11,7 @@ import time
 
 DEFAULT_DEVICE = "/dev/ttyACM0"
 DEFAULT_OUTPUT = "/tmp/firmware-uart.log"
+FLASH_EXIT_TIMEOUT_SECONDS = 5.0
 DIAG_END_MARKERS = (
     "EXT_MAX77958_I2C1_TEST: end",
     "DRV8830_SCOPE_TEST END",
@@ -363,12 +364,19 @@ def parse_last_str(lines, pattern):
 
 def summarize(text, output_path, marker_seen, flash_process):
     lines = text.splitlines()
+    flash_timed_out = False
     print(f"\nLog written to: {output_path}")
 
     if flash_process is not None:
         status = flash_process.poll()
         if status is None:
-            status = flash_process.wait()
+            try:
+                status = flash_process.wait(timeout=FLASH_EXIT_TIMEOUT_SECONDS)
+            except subprocess.TimeoutExpired:
+                flash_process.kill()
+                status = flash_process.wait()
+                flash_timed_out = True
+                print(f"make flash timed out after {FLASH_EXIT_TIMEOUT_SECONDS:.1f}s waiting for exit")
         print(f"make flash exit code: {status}")
 
     print(f"capture completion marker seen: {'yes' if marker_seen else 'no'}")
@@ -518,7 +526,7 @@ def summarize(text, output_path, marker_seen, flash_process):
             f"{'yes' if pcb_source and pd_ready and pcb_ufp and vbus_enabled else 'no'}"
         )
 
-    return 0 if text else 1
+    return 0 if text and not flash_timed_out else 1
 
 
 def main():
