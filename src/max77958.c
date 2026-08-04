@@ -80,6 +80,8 @@ static uint8_t interrupt_mask = GPIO_IRQ_EDGE_FALL;
 static bool test_max77958_interrupt_bool = false;
 static bool test_max77958_started = false;
 static bool test_max77958_completed = false;
+static volatile uint32_t max77958_irq_count = 0;
+static volatile uint32_t max77958_irq_queue_full_count = 0;
 
 static int32_t parse_interrupt_vals();
 static int32_t handle_interrupt_vals(uint8_t uic_int, uint8_t cc_int, uint8_t pd_int);
@@ -340,13 +342,13 @@ static void opcode_trace_log_timeout_classification(void)
 
 
 void max77958_on_interrupt(uint gpio, uint32_t event_mask){
+    (void)gpio;
     if (event_mask & interrupt_mask){
         gpio_acknowledge_irq(_gpio_interrupt, interrupt_mask);	
+        max77958_irq_count++;
         bool parse_queued = call_queue_try_add_nonblocking(&parse_interrupt_vals, 0);
-        rp2040_log("MAX77958_DIAG: IRQ event gpio=%u mask=0x%08" PRIx32 " INTB=%u parse_queued=%u trace_id=%" PRIu32 "\n",
-                    gpio, event_mask, gpio_get(_gpio_interrupt), parse_queued ? 1 : 0, opcode_trace_current_id);
         if (!parse_queued) {
-            rp2040_log("ERROR: MAX77958 interrupt parse queue full\n");
+            max77958_irq_queue_full_count++;
             assert(false);
         }
         if (test_max77958_started){
@@ -537,14 +539,16 @@ static int32_t parse_interrupt_vals(){
     uint8_t PD_INT = return_buf[2];
     uint8_t ACTION_INT = return_buf[3];
 
-    rp2040_log("MAX77958_DIAG: parse_interrupt_vals trace_id=%" PRIu32 " INTB=%u UIC_INT=0x%02x CC_INT=0x%02x PD_INT=0x%02x ACTION_INT=0x%02x queue=%u\n",
+    rp2040_log("MAX77958_DIAG: parse_interrupt_vals trace_id=%" PRIu32 " INTB=%u UIC_INT=0x%02x CC_INT=0x%02x PD_INT=0x%02x ACTION_INT=0x%02x queue=%u irq_count=%" PRIu32 " irq_queue_full=%" PRIu32 "\n",
                 opcode_trace_current_id,
                 gpio_get(_gpio_interrupt),
                 UIC_INT,
                 CC_INT,
                 PD_INT,
                 ACTION_INT,
-                queue_get_level(&opcode_queue));
+                queue_get_level(&opcode_queue),
+                max77958_irq_count,
+                max77958_irq_queue_full_count);
 
     return handle_interrupt_vals(UIC_INT, CC_INT, PD_INT);
 }
