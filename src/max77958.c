@@ -787,6 +787,13 @@ static bool wait_for_opcode_response(const char *context, uint32_t timeout_ms)
 
     rp2040_log("MAX77958_DIAG: %s opcode wait timed out after %" PRIu32 "ms; draining pending interrupts directly\n",
                context, waited_ms);
+    if (opcode_in_flight && !opcode_trace_write_done) {
+        rp2040_log("MAX77958_DIAG: %s opcode wait cannot drain interrupts while opcode write is incomplete\n",
+                   context);
+        opcode_trace_log_timeout_classification();
+        return false;
+    }
+
     service_pending_interrupt_snapshot(context, true);
 
     if (opcodes_finished) {
@@ -795,6 +802,17 @@ static bool wait_for_opcode_response(const char *context, uint32_t timeout_ms)
     }
 
     rp2040_log("MAX77958_DIAG: %s opcode wait failed after pending interrupt drain\n", context);
+    return false;
+}
+
+bool max77958_wait_for_init_complete(void)
+{
+    if (wait_for_opcode_response("max77958_init", 3000)) {
+        rp2040_log("MAX77958_DIAG: init opcode queue finished\n");
+        return true;
+    }
+
+    rp2040_log("ERROR: MAX77958 init opcode queue did not finish\n");
     return false;
 }
 
@@ -1309,13 +1327,6 @@ void max77958_init(uint gpio_interrupt, queue_t* cq, queue_t* rq){
 
     init_config_pending = true;
     opcode_queue_pop();
-#ifdef MAX77958_FORCE_VBUS_DIAGNOSTIC
-    if (wait_for_opcode_response("max77958_init", 3000)) {
-        rp2040_log("MAX77958_DIAG: init opcode queue finished\n");
-    } else {
-        rp2040_log("MAX77958_DIAG: init opcode queue timed out\n");
-    }
-#endif
     rp2040_log("max77958 init finished\n");
 
 }

@@ -224,6 +224,9 @@ void on_start(){
     sn74ahc125rgyr_init(SN74AHC125RGYR_GPIO1);
     sn74ahc125rgyr_init(SN74AHC125RGYR_GPIO2);
     max77958_init(MAX77958_INTB, &call_queue, &results_queue);
+    if (!max77958_wait_for_init_complete()) {
+        assert(false);
+    }
     #endif
 
     sleep_ms(1000);

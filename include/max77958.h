@@ -68,6 +68,7 @@ void max77958_shutdown(uint gpio_interrupt);
 void max77958_on_interrupt(uint gpio, uint32_t event_mask);
 void max77958_on_start_complete(void);
 void max77958_poll_opcode_diagnostics(void);
+bool max77958_wait_for_init_complete(void);
 void test_max77958_status_block_read_all(void);
 void test_max77958_get_id();
 void test_max77958_bc_ctrl1_read();
