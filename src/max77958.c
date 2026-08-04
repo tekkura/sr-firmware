@@ -105,6 +105,7 @@ static bool queue_vbus_on_after_pr_swap_if_source_attached(void);
 static const char *opcode_func_name(int32_t (*opcode_func)());
 static void opcode_trace_mark_func_entry(const char *name, int32_t data);
 static void opcode_trace_log_timeout_classification(void);
+static void opcode_trace_log_timeout_once(void);
 static int32_t opcode_recovery_check(int32_t unused);
 static int64_t opcode_recovery_alarm(alarm_id_t id, void *user_data);
 static void schedule_opcode_recovery_check(void);
@@ -340,6 +341,16 @@ static void opcode_trace_log_timeout_classification(void)
                 gpio_get(_gpio_interrupt));
 }
 
+static void opcode_trace_log_timeout_once(void)
+{
+    if (opcode_trace_timeout_logged) {
+        return;
+    }
+
+    opcode_trace_timeout_logged = true;
+    opcode_trace_log_timeout_classification();
+}
+
 
 
 void max77958_on_interrupt(uint gpio, uint32_t event_mask){
@@ -369,8 +380,7 @@ void max77958_poll_opcode_diagnostics(void)
         return;
     }
 
-    opcode_trace_timeout_logged = true;
-    opcode_trace_log_timeout_classification();
+    opcode_trace_log_timeout_once();
 }
 
 static int on_pd_msg_received(){
@@ -779,6 +789,7 @@ static bool wait_for_opcode_response(const char *context, uint32_t timeout_ms)
 
         sleep_ms(MAX77958_OPCODE_WAIT_POLL_MS);
         waited_ms += MAX77958_OPCODE_WAIT_POLL_MS;
+        max77958_poll_opcode_diagnostics();
     }
 
     if (opcodes_finished) {
@@ -790,7 +801,7 @@ static bool wait_for_opcode_response(const char *context, uint32_t timeout_ms)
     if (opcode_in_flight && !opcode_trace_write_done) {
         rp2040_log("MAX77958_DIAG: %s opcode wait cannot drain interrupts while opcode write is incomplete\n",
                    context);
-        opcode_trace_log_timeout_classification();
+        opcode_trace_log_timeout_once();
         return false;
     }
 
