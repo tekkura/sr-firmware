@@ -24,6 +24,7 @@ static uint8_t op_code_return_buf[33] = {0}; // Will read full buffer from regis
 #define PD_STATUS1_DATA_ROLE_DFP (1u << 7)
 #define PD_STATUS1_PSRDY (1u << 4)
 #define MAX77958_PR_SWAP_MAX_RETRIES 5
+#define MAX77958_DR_SWAP_MAX_RETRIES 3
 #define MAX77958_STARTUP_SETTLE_MS 300
 #define MAX77958_ROLE_RECHECK_DELAY_MS 250
 #define MAX77958_SOURCE_DFP_NOT_READY_MAX_RECHECKS 8
@@ -46,9 +47,11 @@ static queue_t* return_queue_ptr;
 static bool opcode_cmd_finished = false;
 static bool power_swap_enabled = true;
 static bool opcodes_finished = false;
+static bool opcode_in_flight = false;
 static bool data_role_swap_requested = false;
 static bool init_config_pending = false;
 static uint8_t power_role_swap_request_count = 0;
+static uint8_t data_role_swap_request_count = 0;
 static bool vbus_enable_requested = false;
 static bool source_dfp_not_ready_recheck_pending = false;
 static bool post_prswap_vbus_recheck_pending = false;
@@ -244,6 +247,7 @@ static int on_pd_msg_received(){
 static int on_opcode_cmd_response(){
     // You can now READ back the OpCommand return registers
     opcode_read();
+    opcode_in_flight = false;
     // opcode_queue_pop will return false if the opcode queue is empty
     if (!opcode_queue_pop()){
         opcodes_finished = true;
@@ -1127,11 +1131,16 @@ void max77958_init(uint gpio_interrupt, queue_t* cq, queue_t* rq){
 // return false if opccode_queue was empty 
 static bool opcode_queue_pop(){
     queue_entry_t entry;
+    if (opcode_in_flight) {
+        rp2040_log("opcode_queue_pop: opcode already in flight\n");
+        return false;
+    }
     // if there is an entry in the opcode_queue, remove it and add it to the call_queue
     if (queue_try_remove(&opcode_queue, &entry)){
 	rp2040_log("Removed entry from opcode_queue. %d entries remaining\n", queue_get_level(&opcode_queue));
 	// if the call_queue is full, assert
 	if(queue_try_add(call_queue_ptr, &entry)){
+            opcode_in_flight = true;
 	    rp2040_log("added opcode entry to call_queue\n");
 	    return true;
 	}else{
@@ -1391,6 +1400,12 @@ static bool queue_data_role_swap_to_ufp_if_ready(const char *reason)
         return false;
     }
 
+    if (data_role_swap_request_count >= MAX77958_DR_SWAP_MAX_RETRIES) {
+        rp2040_log("MAX77958_DIAG: DR_SWAP retry exhausted; staying in current data role\n");
+        return false;
+    }
+
+    data_role_swap_request_count++;
     data_role_swap_requested = true;
     opcode_queue_add(data_role_swap_request, 0);
     return true;
@@ -1422,10 +1437,21 @@ static bool queue_vbus_on_after_pr_swap_if_source_attached(void)
 static int64_t delayed_role_recheck_alarm(alarm_id_t id, void *user_data)
 {
     (void)id;
+    int32_t reason = (int32_t)(intptr_t)user_data;
+    queue_entry_t entry = {delayed_role_recheck, reason};
 
-    if (call_queue_ptr != NULL) {
-        queue_entry_t entry = {delayed_role_recheck, (int32_t)(intptr_t)user_data};
-        queue_try_add(call_queue_ptr, &entry);
+    if (call_queue_ptr == NULL || !queue_try_add(call_queue_ptr, &entry)) {
+        switch (reason) {
+            case MAX77958_RECHECK_SOURCE_DFP_NOT_READY:
+                source_dfp_not_ready_recheck_pending = false;
+                break;
+            case MAX77958_RECHECK_POST_PRSWAP_VBUS:
+                post_prswap_vbus_recheck_pending = false;
+                break;
+            default:
+                break;
+        }
+        rp2040_log("MAX77958_DIAG: failed to queue delayed role recheck reason=%d\n", reason);
     }
 
     return 0;
@@ -1518,11 +1544,18 @@ static bool queue_data_role_swap_to_ufp_once(void)
     }
 
     if (state.pcb_data != MAX77958_PCB_DATA_DFP_HOST) {
-        rp2040_log("MAX77958_DIAG: data role already UFP/device\n");
+	rp2040_log("MAX77958_DIAG: data role already UFP/device\n");
         data_role_swap_requested = true;
+        data_role_swap_request_count = 0;
         return false;
     }
 
+    if (data_role_swap_request_count >= MAX77958_DR_SWAP_MAX_RETRIES) {
+        rp2040_log("MAX77958_DIAG: DR_SWAP retry exhausted; staying in current data role\n");
+        return false;
+    }
+
+    data_role_swap_request_count++;
     data_role_swap_requested = true;
     opcode_queue_add(data_role_swap_request, 0);
     return true;
@@ -1611,6 +1644,7 @@ static void vbus_turn_off(){
 #endif
     rp2040_log("MAX77958_DIAG: setting VBUS GPIO4/GPIO5 off\n");
     data_role_swap_requested = false;
+    data_role_swap_request_count = 0;
     vbus_enable_requested = false;
     opcode_queue_add(&gpio_set, gpio_bool_to_int32(false, false));
     opcode_queue_pop();
@@ -1646,6 +1680,7 @@ static int32_t pd_msg_response(){
 	    break;
         case PDMSG_REJECT_RECEIVED:
 	    rp2040_log("PD Message: REJECT_RECEIVED\n");
+            data_role_swap_requested = false;
             if (evaluate_current_role_state("PD reject")) {
                 opcode_queue_pop();
             }
