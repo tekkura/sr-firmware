@@ -108,6 +108,7 @@ static void opcode_trace_log_timeout_classification(void);
 static int32_t opcode_recovery_check(int32_t unused);
 static int64_t opcode_recovery_alarm(alarm_id_t id, void *user_data);
 static void schedule_opcode_recovery_check(void);
+static int32_t start_complete_role_check(int32_t unused);
 static int32_t delayed_role_recheck(int32_t reason);
 static int64_t delayed_role_recheck_alarm(alarm_id_t id, void *user_data);
 static void schedule_delayed_role_recheck(int32_t reason);
@@ -1316,7 +1317,6 @@ void max77958_init(uint gpio_interrupt, queue_t* cq, queue_t* rq){
     }
 #endif
     rp2040_log("max77958 init finished\n");
-    on_ccstat_change();
 
 }
 
@@ -1581,7 +1581,14 @@ static bool evaluate_current_role_state(const char *reason)
 
 void max77958_on_start_complete(void)
 {
+    call_queue_try_add(&start_complete_role_check, 0);
+}
+
+static int32_t start_complete_role_check(int32_t unused)
+{
+    (void)unused;
     evaluate_current_role_state("post on_start complete");
+    return 0;
 }
 
 static bool queue_power_role_swap_to_source_if_ready(const char *reason)
