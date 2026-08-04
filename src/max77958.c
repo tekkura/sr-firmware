@@ -3,6 +3,7 @@
 #include <string.h>
 #include <assert.h>
 #include "pico/stdlib.h"
+#include "pico/mutex.h"
 #include "hardware/i2c.h"
 #include "max77958.h"
 #include "max77958_driver.h"
@@ -14,6 +15,7 @@
 static uint8_t send_buf[33] = {0};
 static uint8_t return_buf[33] = {0}; 
 static uint8_t op_code_return_buf[33] = {0}; // Will read full buffer from registers 0x52 to 0x71
+auto_init_mutex(max77958_i2c_mutex);
 #define PDMSG_POWER_SUPPLY_VBUS_ENABLE 0x17
 #define PDMSG_POWER_SUPPLY_VBUS_DISABLE 0x18
 #define MAX77958_SWAP_REQ_DR_SWAP 0x01
@@ -89,6 +91,7 @@ static int32_t parse_interrupt_vals();
 static int32_t handle_interrupt_vals(uint8_t uic_int, uint8_t cc_int, uint8_t pd_int);
 static void on_interrupt();
 static void get_interrupt_vals();
+static void read_interrupt_vals(uint8_t *uic_int, uint8_t *cc_int, uint8_t *pd_int, uint8_t *action_int);
 static void get_interrupt_masks();
 static void set_interrupt_masks();
 static uint8_t max77958_read_register(uint8_t reg);
@@ -144,6 +147,31 @@ static int32_t gpio_control_read(void);
 static int32_t gpio0_gpio1_adc_read(void);
 static int32_t snk_pdo_request();
 static int32_t customer_config_read();
+
+static void max77958_i2c_lock(void)
+{
+    mutex_enter_blocking(&max77958_i2c_mutex);
+}
+
+static void max77958_i2c_unlock(void)
+{
+    mutex_exit(&max77958_i2c_mutex);
+}
+
+static void max77958_read_bytes(uint8_t reg, uint8_t *dst, size_t len)
+{
+    max77958_i2c_lock();
+    i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, &reg, 1, true);
+    i2c_read_error_handling(i2c0, MAX77958_SLAVE_P1, dst, len, false);
+    max77958_i2c_unlock();
+}
+
+static void max77958_write_bytes(const uint8_t *src, size_t len)
+{
+    max77958_i2c_lock();
+    i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, src, len, false);
+    max77958_i2c_unlock();
+}
 typedef struct {
     const char *name;
     uint8_t reg;
@@ -419,14 +447,11 @@ static int on_opcode_cmd_response(){
 static void on_ccstat_change(void) {
     rp2040_log("CCStat: ccstat changed\n");
 
-    memset(send_buf, 0, sizeof send_buf);
-    memset(return_buf, 0, sizeof return_buf);
-    send_buf[0] = 0x0C; // CC_STATUS0
-    i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, send_buf, 1, true);
-    i2c_read_error_handling(i2c0, MAX77958_SLAVE_P1, return_buf, 2, false);
+    uint8_t cc_status[2] = {0};
+    max77958_read_bytes(0x0C, cc_status, sizeof cc_status);
 
-    uint8_t cc_status0 = return_buf[0];
-    uint8_t cc_status1 = return_buf[1];
+    uint8_t cc_status0 = cc_status[0];
+    uint8_t cc_status1 = cc_status[1];
 
     // ----- CC_STATUS0 bitfields -----
     uint8_t CCPinStat  = cc_status0 & 0b11000000;   // bits [7:6]
@@ -507,12 +532,9 @@ static void on_ccstat_change(void) {
 
 static void on_chgtype_change(){
     rp2040_log("chgtype changed\n");
-    memset(send_buf, 0, sizeof send_buf);
-    memset(return_buf, 0, sizeof return_buf);
-    send_buf[0] = 0xA; // BC_STATUS
-    i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, send_buf, 1, true);
-    i2c_read_error_handling(i2c0, MAX77958_SLAVE_P1, return_buf, 1, false);
-    uint8_t ChgType = return_buf[0] & 0b11;
+    uint8_t bc_status = 0;
+    max77958_read_bytes(0x0A, &bc_status, 1);
+    uint8_t ChgType = bc_status & 0b11;
     switch (ChgType){
 	case 0b000:
 	    rp2040_log("ChgTyp changed to nothing attached\n");
@@ -545,12 +567,12 @@ static void opcode_queue_add(int32_t (opcode_func)(), int32_t opcode_data){
 } 
 
 static int32_t parse_interrupt_vals(){
-    get_interrupt_vals();
+    uint8_t UIC_INT;
+    uint8_t CC_INT;
+    uint8_t PD_INT;
+    uint8_t ACTION_INT;
+    read_interrupt_vals(&UIC_INT, &CC_INT, &PD_INT, &ACTION_INT);
     // don't really need these, but makes it easier to understand what each entry to the return_buf represents
-    uint8_t UIC_INT = return_buf[0];
-    uint8_t CC_INT = return_buf[1];
-    uint8_t PD_INT = return_buf[2];
-    uint8_t ACTION_INT = return_buf[3];
 
     rp2040_log("MAX77958_DIAG: parse_interrupt_vals trace_id=%" PRIu32 " INTB=%u UIC_INT=0x%02x CC_INT=0x%02x PD_INT=0x%02x ACTION_INT=0x%02x queue=%u irq_count=%" PRIu32 " irq_queue_full=%" PRIu32 "\n",
                 opcode_trace_current_id,
@@ -631,48 +653,49 @@ static void on_ccpinstat_change(){
 }
 
 static void get_interrupt_vals(){
-    memset(send_buf, 0, sizeof send_buf);
-    memset(return_buf, 0, sizeof return_buf);
-    send_buf[0] = REG_UIC_INT; // 0x04 Register
-    i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, send_buf, 1, true);
-    i2c_read_error_handling(i2c0, MAX77958_SLAVE_P1, return_buf, 4, false);
+    read_interrupt_vals(&return_buf[0], &return_buf[1], &return_buf[2], &return_buf[3]);
     //rp2040_log("interrupts vals: 0x4: 0x%02x, 0x5: 0x%02x, 0x6: 0x%02x, 0x7: 0x%02x\n", return_buf[0], return_buf[1], return_buf[2], return_buf[3]);
 }
 
+static void read_interrupt_vals(uint8_t *uic_int, uint8_t *cc_int, uint8_t *pd_int, uint8_t *action_int)
+{
+    uint8_t vals[4] = {0};
+    max77958_read_bytes(REG_UIC_INT, vals, sizeof vals);
+    *uic_int = vals[0];
+    *cc_int = vals[1];
+    *pd_int = vals[2];
+    *action_int = vals[3];
+}
+
 static void get_interrupt_masks(){
-    memset(send_buf, 0, sizeof send_buf);
-    memset(return_buf, 0, sizeof return_buf);
-    send_buf[0] = REG_UIC_INT_M; // 0x10 UIC_INT_M Register
-    i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, send_buf, 1, true);
-    i2c_read_error_handling(i2c0, MAX77958_SLAVE_P1, return_buf, 4, false);
+    max77958_read_bytes(REG_UIC_INT_M, return_buf, 4);
 }
 
 // Mask all interrupts for unit test purposes
 static void set_interrupt_masks_all_masked(){
-    memset(send_buf, 0, sizeof send_buf);
-    send_buf[0] = REG_UIC_INT_M; // 0x10 UIC_INT_M Register
-    send_buf[1] = 0b11111111; // UIC_INT_M 0x10 values
-    send_buf[2] = 0b11111111; // CC_INT_M 0x11 values
-    send_buf[3] = 0b11111111; // PD_INT_M 0x12 unmasking PSRDYI
-    i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, send_buf, 4, false);
+    uint8_t masks[] = {
+        REG_UIC_INT_M,
+        0b11111111, // UIC_INT_M 0x10 values
+        0b11111111, // CC_INT_M 0x11 values
+        0b11111111, // PD_INT_M 0x12 unmasking PSRDYI
+    };
+    max77958_write_bytes(masks, sizeof masks);
 }
 
 static void set_interrupt_masks(){
-    memset(send_buf, 0, sizeof send_buf);
-    send_buf[0] = REG_UIC_INT_M; // 0x10 UIC_INT_M Register
-    send_buf[1] = 0b00000100; // UIC_INT_M 0x10 values
-    send_buf[2] = 0b00000000; // CC_INT_M 0x11 values
-    send_buf[3] = 0b00111111; // PD_INT_M 0x12 unmasking PSRDYI
-    i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, send_buf, 4, false);
+    uint8_t masks[] = {
+        REG_UIC_INT_M,
+        0b00000100, // UIC_INT_M 0x10 values
+        0b00000000, // CC_INT_M 0x11 values
+        0b00111111, // PD_INT_M 0x12 unmasking PSRDYI
+    };
+    max77958_write_bytes(masks, sizeof masks);
 }
 
 void read_reg(uint8_t reg){
-    memset(send_buf, 0, sizeof send_buf);
-    memset(return_buf, 0, sizeof return_buf);
-    send_buf[0] = reg; 
-    i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, send_buf, 1, true);
-    i2c_read_error_handling(i2c0, MAX77958_SLAVE_P1, return_buf, 1, false);
-    rp2040_log("read_reg: 0x%02x: 0x%02x\n", reg, return_buf[0]);
+    uint8_t value = 0;
+    max77958_read_bytes(reg, &value, 1);
+    rp2040_log("read_reg: 0x%02x: 0x%02x\n", reg, value);
 }
 
 static int opcode_write(uint8_t *buf){
@@ -704,6 +727,7 @@ static int opcode_write(uint8_t *buf){
                 opcode_trace_current_id,
                 (unsigned)sizeof(send_buf),
                 gpio_get(_gpio_interrupt));
+    max77958_i2c_lock();
     i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, buf, sizeof(send_buf), false);
     rp2040_log("MAX77958_DIAG: opcode trace id=%" PRIu32 " opcode_write data burst done INTB=%u\n",
                 opcode_trace_current_id,
@@ -711,15 +735,14 @@ static int opcode_write(uint8_t *buf){
     //rp2040_log("opcode_write: 0x%02x 0x%02x 0x%02x 0x%02x\n", buf[0], buf[1], buf[2], buf[3]);
 
     // For whatever reason, this is necessary for the interrupt to fire. Even though I already write 0x00 to it in the line above.
-    memset(send_buf, 0, sizeof send_buf);
-    send_buf[0] = 0x41;
-    send_buf[1] = 0x00;
+    uint8_t latch_buf[2] = {0x41, 0x00};
     rp2040_log("MAX77958_DIAG: opcode trace id=%" PRIu32 " opcode_write latch start bytes=0x%02x/0x%02x INTB=%u\n",
                 opcode_trace_current_id,
-                send_buf[0],
-                send_buf[1],
+                latch_buf[0],
+                latch_buf[1],
                 gpio_get(_gpio_interrupt));
-    i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, send_buf, 2, false);
+    i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, latch_buf, sizeof latch_buf, false);
+    max77958_i2c_unlock();
     rp2040_log("MAX77958_DIAG: opcode trace id=%" PRIu32 " opcode_write latch done INTB=%u\n",
                 opcode_trace_current_id,
                 gpio_get(_gpio_interrupt));
@@ -733,10 +756,7 @@ static int opcode_write(uint8_t *buf){
 
 static void opcode_read(){
     // Set the current register pointer to 0x51 to you can read the return values from the OpCode Command
-    memset(send_buf, 0, sizeof send_buf);
-    send_buf[0] = OPCODE_READ_COMMAND;
-    i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, send_buf, 1, true);
-    i2c_read_error_handling(i2c0, MAX77958_SLAVE_P1, op_code_return_buf, 33, false);
+    max77958_read_bytes(OPCODE_READ_COMMAND, op_code_return_buf, 33);
     rp2040_log("opcode_read: 0x%02x 0x%02x 0x%02x 0x%02x\n", op_code_return_buf[0], op_code_return_buf[1], op_code_return_buf[2], op_code_return_buf[3]);
     if (op_code_return_buf[0] == 0x0B) {
         rp2040_log("CC_CTRL1 readback = 0x%02x\n", op_code_return_buf[1]);
@@ -753,11 +773,11 @@ static void opcode_read(){
 
 static bool service_pending_interrupt_snapshot(const char *context, bool log_snapshot)
 {
-    get_interrupt_vals();
-    uint8_t uic_int = return_buf[0];
-    uint8_t cc_int = return_buf[1];
-    uint8_t pd_int = return_buf[2];
-    uint8_t action_int = return_buf[3];
+    uint8_t uic_int;
+    uint8_t cc_int;
+    uint8_t pd_int;
+    uint8_t action_int;
+    read_interrupt_vals(&uic_int, &cc_int, &pd_int, &action_int);
 
     if (log_snapshot) {
         rp2040_log("MAX77958_DIAG: %s interrupt drain INTB=%u UIC_INT=0x%02x CC_INT=0x%02x PD_INT=0x%02x ACTION_INT=0x%02x opcode_queue=%u\n",
@@ -831,12 +851,9 @@ bool max77958_wait_for_init_complete(void)
 
 static uint8_t max77958_read_register(uint8_t reg)
 {
-    memset(send_buf, 0, sizeof send_buf);
-    memset(return_buf, 0, sizeof return_buf);
-    send_buf[0] = reg;
-    i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, send_buf, 1, true);
-    i2c_read_error_handling(i2c0, MAX77958_SLAVE_P1, return_buf, 1, false);
-    return return_buf[0];
+    uint8_t value = 0;
+    max77958_read_bytes(reg, &value, 1);
+    return value;
 }
 
 void test_max77958_status_block_read_all(void)
@@ -871,18 +888,16 @@ void test_max77958_get_id(){
     rp2040_log("test_max77958_get_id started...\n");
     // Testing for just DEVICE_ID
     // Write the register 0x00 to set the pointer there before reading its value
-    memset(send_buf, 0, sizeof send_buf);
-    memset(return_buf, 0, sizeof return_buf);
-    i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, send_buf, 1, true);
-    i2c_read_error_handling(i2c0, MAX77958_SLAVE_P1, return_buf, 2, false);
-    if (return_buf[0] != 0x58){
+    uint8_t id[2] = {0};
+    max77958_read_bytes(0x00, id, sizeof id);
+    if (id[0] != 0x58){
 	rp2040_log("test_max77958_get_id ERROR: DEVICE_ID should be 0x58");
     }
-    if (return_buf[1] != 0x02){
+    if (id[1] != 0x02){
 	rp2040_log("test_max77958_get_id ERROR: DEVICE_REV should be 0x02");
     }
-    rp2040_log("test_max77958_get_id PASSED: DEVICE_ID = %x\n", return_buf[0]);
-    rp2040_log("test_max77958_get_id PASSED: DEVICE_REV = %x\n", return_buf[1]);
+    rp2040_log("test_max77958_get_id PASSED: DEVICE_ID = %x\n", id[0]);
+    rp2040_log("test_max77958_get_id PASSED: DEVICE_REV = %x\n", id[1]);
 }
 
 static int32_t bc_ctrl1_read(){
@@ -1754,11 +1769,7 @@ static int32_t opcode_recovery_check(int32_t unused)
         return 0;
     }
 
-    get_interrupt_vals();
-    uic_int = return_buf[0];
-    cc_int = return_buf[1];
-    pd_int = return_buf[2];
-    action_int = return_buf[3];
+    read_interrupt_vals(&uic_int, &cc_int, &pd_int, &action_int);
     rp2040_log("MAX77958_DIAG: opcode recovery drain trace_id=%" PRIu32 " count=%u/%u INTB=%u UIC_INT=0x%02x CC_INT=0x%02x PD_INT=0x%02x ACTION_INT=0x%02x queue=%u\n",
                 opcode_trace_current_id,
                 opcode_recovery_check_count,
@@ -2025,13 +2036,10 @@ static void vbus_turn_on(){
 
 static int32_t pd_msg_response(){
     // Read the 0xE PD_STATUS0 register as it contains the PD message Type recieved 
-    memset(send_buf, 0, sizeof send_buf);
-    memset(return_buf, 0, sizeof return_buf);
-    send_buf[0] = REG_PD_STATUS0; // 0xE PD_STATUS0 Register 
-    i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, send_buf, 1, true);
-    i2c_read_error_handling(i2c0, MAX77958_SLAVE_P1, return_buf, 1, false);
-    rp2040_log("PD_STATUS0: 0x%02x\n", return_buf[0]);
-    switch (return_buf[0]){
+    uint8_t pd_status0 = 0;
+    max77958_read_bytes(REG_PD_STATUS0, &pd_status0, 1);
+    rp2040_log("PD_STATUS0: 0x%02x\n", pd_status0);
+    switch (pd_status0){
         case PDMSG_DR_SWAP_REQ_RECEIVED:
 	    rp2040_log("PD Message: DR_SWAP_REQ_RECEIVED\n");
 	    break;
