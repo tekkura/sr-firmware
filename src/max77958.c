@@ -49,7 +49,7 @@ static queue_t* return_queue_ptr;
 static bool opcode_cmd_finished = false;
 static bool power_swap_enabled = true;
 static bool opcodes_finished = false;
-static bool opcode_in_flight = false;
+static volatile bool opcode_in_flight = false;
 static bool data_role_swap_requested = false;
 static bool init_config_pending = false;
 static uint8_t power_role_swap_request_count = 0;
@@ -57,10 +57,22 @@ static uint8_t data_role_swap_request_count = 0;
 static bool vbus_enable_requested = false;
 static bool source_dfp_not_ready_recheck_pending = false;
 static bool post_prswap_vbus_recheck_pending = false;
-static bool opcode_recovery_pending = false;
+static volatile bool opcode_recovery_pending = false;
 static uint8_t source_dfp_not_ready_recheck_count = 0;
 static uint8_t post_prswap_vbus_recheck_count = 0;
-static uint8_t opcode_recovery_check_count = 0;
+static volatile uint8_t opcode_recovery_check_count = 0;
+static volatile uint32_t opcode_trace_next_id = 1;
+static volatile uint32_t opcode_trace_current_id = 0;
+static int32_t (*volatile opcode_trace_current_func)() = NULL;
+static volatile int32_t opcode_trace_current_data = 0;
+static volatile uint32_t opcode_trace_dispatch_ms = 0;
+static volatile bool opcode_trace_func_entered = false;
+static volatile bool opcode_trace_write_started = false;
+static volatile bool opcode_trace_write_done = false;
+static volatile uint8_t opcode_trace_cmd0 = 0;
+static volatile uint8_t opcode_trace_cmd1 = 0;
+static volatile uint8_t opcode_trace_cmd2 = 0;
+static volatile uint8_t opcode_trace_cmd3 = 0;
 static queue_t opcode_queue;
 static uint8_t _gpio_interrupt;
 static uint8_t interrupt_mask = GPIO_IRQ_EDGE_FALL;
@@ -87,6 +99,9 @@ static bool evaluate_current_role_state(const char *reason);
 static bool queue_power_role_swap_to_source_if_ready(const char *reason);
 static bool queue_data_role_swap_to_ufp_if_ready(const char *reason);
 static bool queue_vbus_on_after_pr_swap_if_source_attached(void);
+static const char *opcode_func_name(int32_t (*opcode_func)());
+static void opcode_trace_mark_func_entry(const char *name, int32_t data);
+static void opcode_trace_log_timeout_classification(void);
 static int32_t opcode_recovery_check(int32_t unused);
 static int64_t opcode_recovery_alarm(alarm_id_t id, void *user_data);
 static void schedule_opcode_recovery_check(void);
@@ -233,12 +248,106 @@ static void log_role_state(const char *prefix, const char *reason, const max7795
                 state->pd_ready ? 1 : 0, ready_name(state->pd_ready ? 1 : 0));
 }
 
+static const char *opcode_func_name(int32_t (*opcode_func)())
+{
+    if (opcode_func == gpio_set) {
+        return "gpio_set";
+    }
+    if (opcode_func == power_swap_request) {
+        return "power_swap_request";
+    }
+    if (opcode_func == data_role_swap_request) {
+        return "data_role_swap_request";
+    }
+    if (opcode_func == swap_response_write) {
+        return "swap_response_write";
+    }
+    if (opcode_func == customer_config_write) {
+        return "customer_config_write";
+    }
+    if (opcode_func == cc_ctrl1_write_snk_only) {
+        return "cc_ctrl1_write_snk_only";
+    }
+    if (opcode_func == bc_ctrl1_read) {
+        return "bc_ctrl1_read";
+    }
+    if (opcode_func == bc_ctrl2_read) {
+        return "bc_ctrl2_read";
+    }
+    if (opcode_func == control1_read) {
+        return "control1_read";
+    }
+    if (opcode_func == cc_ctrl1_read) {
+        return "cc_ctrl1_read";
+    }
+    if (opcode_func == cc_ctrl4_read) {
+        return "cc_ctrl4_read";
+    }
+    if (opcode_func == gpio_control_read) {
+        return "gpio_control_read";
+    }
+    if (opcode_func == gpio0_gpio1_adc_read) {
+        return "gpio0_gpio1_adc_read";
+    }
+    if (opcode_func == snk_pdo_request) {
+        return "snk_pdo_request";
+    }
+    if (opcode_func == customer_config_read) {
+        return "customer_config_read";
+    }
+#ifdef MAX77958_FORCE_VBUS_DIAGNOSTIC
+    if (opcode_func == force_vbus_on_for_diagnostic) {
+        return "force_vbus_on_for_diagnostic";
+    }
+#endif
+    return "unknown";
+}
+
+static void opcode_trace_mark_func_entry(const char *name, int32_t data)
+{
+    opcode_trace_func_entered = true;
+    rp2040_log("MAX77958_DIAG: opcode trace id=%" PRIu32 " function entry name=%s data=0x%08" PRIx32 " INTB=%u\n",
+                opcode_trace_current_id, name, (uint32_t)data, gpio_get(_gpio_interrupt));
+}
+
+static void opcode_trace_log_timeout_classification(void)
+{
+    const char *classification = "MAX77958 opcode response not observed after opcode write";
+
+    if (!opcode_trace_func_entered) {
+        classification = "call_queue dispatch did not reach opcode function";
+    } else if (!opcode_trace_write_started) {
+        classification = "opcode function entered but opcode_write was not reached";
+    } else if (!opcode_trace_write_done) {
+        classification = "opcode_write started but did not complete";
+    }
+
+    rp2040_log("MAX77958_DIAG: opcode trace id=%" PRIu32 " classification=%s func=%s data=0x%08" PRIx32 " cmd=0x%02x/0x%02x/0x%02x/0x%02x age_ms=%" PRIu32 " queue=%u INTB=%u\n",
+                opcode_trace_current_id,
+                classification,
+                opcode_func_name(opcode_trace_current_func),
+                (uint32_t)opcode_trace_current_data,
+                opcode_trace_cmd0,
+                opcode_trace_cmd1,
+                opcode_trace_cmd2,
+                opcode_trace_cmd3,
+                to_ms_since_boot(get_absolute_time()) - opcode_trace_dispatch_ms,
+                queue_get_level(&opcode_queue),
+                gpio_get(_gpio_interrupt));
+}
+
 
 
 void max77958_on_interrupt(uint gpio, uint32_t event_mask){
     if (event_mask & interrupt_mask){
         gpio_acknowledge_irq(_gpio_interrupt, interrupt_mask);	
-	call_queue_try_add(&parse_interrupt_vals, 0);
+        bool parse_queued = call_queue_try_add_nonblocking(&parse_interrupt_vals, 0);
+        rp2040_log("MAX77958_DIAG: IRQ event gpio=%u mask=0x%08" PRIx32 " INTB=%u parse_queued=%u trace_id=%" PRIu32 "\n",
+                    gpio, event_mask, gpio_get(_gpio_interrupt), parse_queued ? 1 : 0, opcode_trace_current_id);
+        if (!parse_queued) {
+            rp2040_log("ERROR: MAX77958 interrupt parse queue full\n");
+            assert(false);
+        }
         if (test_max77958_started){
             call_queue_try_add(&max77958_test_response, 1);
         }
@@ -253,6 +362,11 @@ static int on_pd_msg_received(){
 
 static int on_opcode_cmd_response(){
     // You can now READ back the OpCommand return registers
+    rp2040_log("MAX77958_DIAG: opcode trace id=%" PRIu32 " AP_CMD_RES handling func=%s queue=%u INTB=%u\n",
+                opcode_trace_current_id,
+                opcode_func_name(opcode_trace_current_func),
+                queue_get_level(&opcode_queue),
+                gpio_get(_gpio_interrupt));
     opcode_read();
     opcode_in_flight = false;
     opcode_recovery_pending = false;
@@ -391,7 +505,12 @@ static void opcode_queue_add(int32_t (opcode_func)(), int32_t opcode_data){
 	rp2040_log("ERROR: opcode_queue is full");
 	assert(false);
     }
-    rp2040_log("Added to opcode_queue. %d entries remaining\n", queue_get_level(&opcode_queue));
+    rp2040_log("MAX77958_DIAG: opcode queue add func=%s data=0x%08" PRIx32 " queue=%u in_flight=%u INTB=%u\n",
+                opcode_func_name(opcode_func),
+                (uint32_t)opcode_data,
+                queue_get_level(&opcode_queue),
+                opcode_in_flight ? 1 : 0,
+                gpio_get(_gpio_interrupt));
 } 
 
 static int32_t parse_interrupt_vals(){
@@ -400,6 +519,16 @@ static int32_t parse_interrupt_vals(){
     uint8_t UIC_INT = return_buf[0];
     uint8_t CC_INT = return_buf[1];
     uint8_t PD_INT = return_buf[2];
+    uint8_t ACTION_INT = return_buf[3];
+
+    rp2040_log("MAX77958_DIAG: parse_interrupt_vals trace_id=%" PRIu32 " INTB=%u UIC_INT=0x%02x CC_INT=0x%02x PD_INT=0x%02x ACTION_INT=0x%02x queue=%u\n",
+                opcode_trace_current_id,
+                gpio_get(_gpio_interrupt),
+                UIC_INT,
+                CC_INT,
+                PD_INT,
+                ACTION_INT,
+                queue_get_level(&opcode_queue));
 
     return handle_interrupt_vals(UIC_INT, CC_INT, PD_INT);
 }
@@ -521,6 +650,23 @@ static int opcode_write(uint8_t *buf){
 	rp2040_log("ERROR: buffer should always start with the 0x21 register");
     }
 
+    if (!opcode_trace_func_entered) {
+        opcode_trace_mark_func_entry(opcode_func_name(opcode_trace_current_func), opcode_trace_current_data);
+    }
+    opcode_trace_write_started = true;
+    opcode_trace_write_done = false;
+    opcode_trace_cmd0 = buf[0];
+    opcode_trace_cmd1 = buf[1];
+    opcode_trace_cmd2 = buf[2];
+    opcode_trace_cmd3 = buf[3];
+    rp2040_log("MAX77958_DIAG: opcode trace id=%" PRIu32 " opcode_write start func=%s bytes=0x%02x/0x%02x/0x%02x/0x%02x INTB=%u\n",
+                opcode_trace_current_id,
+                opcode_func_name(opcode_trace_current_func),
+                opcode_trace_cmd0,
+                opcode_trace_cmd1,
+                opcode_trace_cmd2,
+                opcode_trace_cmd3,
+                gpio_get(_gpio_interrupt));
     i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, buf, sizeof(send_buf), false);
     //rp2040_log("opcode_write: 0x%02x 0x%02x 0x%02x 0x%02x\n", buf[0], buf[1], buf[2], buf[3]);
 
@@ -529,6 +675,11 @@ static int opcode_write(uint8_t *buf){
     send_buf[0] = 0x41;
     send_buf[1] = 0x00;
     i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, send_buf, 2, false);
+    opcode_trace_write_done = true;
+    rp2040_log("MAX77958_DIAG: opcode trace id=%" PRIu32 " opcode_write done func=%s INTB=%u\n",
+                opcode_trace_current_id,
+                opcode_func_name(opcode_trace_current_func),
+                gpio_get(_gpio_interrupt));
     return 1;
 }
 
@@ -1146,17 +1297,45 @@ static bool opcode_queue_pop(){
     }
     // if there is an entry in the opcode_queue, remove it and add it to the call_queue
     if (queue_try_remove(&opcode_queue, &entry)){
-	rp2040_log("Removed entry from opcode_queue. %d entries remaining\n", queue_get_level(&opcode_queue));
+        uint32_t trace_id = opcode_trace_next_id++;
+        uint32_t queue_level = queue_get_level(&opcode_queue);
+	rp2040_log("MAX77958_DIAG: opcode trace id=%" PRIu32 " dispatch func=%s data=0x%08" PRIx32 " queue_after_remove=%" PRIu32 " INTB=%u\n",
+                    trace_id,
+                    opcode_func_name(entry.func),
+                    (uint32_t)entry.data,
+                    queue_level,
+                    gpio_get(_gpio_interrupt));
+        opcode_in_flight = true;
+        opcode_trace_current_id = trace_id;
+        opcode_trace_current_func = entry.func;
+        opcode_trace_current_data = entry.data;
+        opcode_trace_dispatch_ms = to_ms_since_boot(get_absolute_time());
+        opcode_trace_func_entered = false;
+        opcode_trace_write_started = false;
+        opcode_trace_write_done = false;
+        opcode_trace_cmd0 = 0;
+        opcode_trace_cmd1 = 0;
+        opcode_trace_cmd2 = 0;
+        opcode_trace_cmd3 = 0;
+
 	// if the call_queue is full, assert
 	if(queue_try_add(call_queue_ptr, &entry)){
-            opcode_in_flight = true;
             opcode_recovery_check_count = 0;
             opcode_recovery_pending = false;
+	    rp2040_log("MAX77958_DIAG: opcode trace id=%" PRIu32 " added to call_queue func=%s queue=%u INTB=%u\n",
+                        opcode_trace_current_id,
+                        opcode_func_name(opcode_trace_current_func),
+                        queue_get_level(&opcode_queue),
+                        gpio_get(_gpio_interrupt));
             schedule_opcode_recovery_check();
-	    rp2040_log("added opcode entry to call_queue\n");
 	    return true;
 	}else{
-	    rp2040_log("ERROR: opcode_queue_pop: call_queue full\n");
+            opcode_in_flight = false;
+            opcode_trace_current_id = 0;
+            opcode_trace_current_func = NULL;
+	    rp2040_log("ERROR: opcode_queue_pop: call_queue full for trace id=%" PRIu32 " func=%s\n",
+                        trace_id,
+                        opcode_func_name(entry.func));
 	    return false;
 	}
     }
@@ -1168,6 +1347,7 @@ static bool opcode_queue_pop(){
 }
 
 static int32_t customer_config_write(){
+    opcode_trace_mark_func_entry("customer_config_write", 0);
     memset(send_buf, 0, sizeof send_buf);
     send_buf[0] = OPCODE_WRITE;
     send_buf[1] = 0x56; // Customer Configuration Write
@@ -1255,6 +1435,7 @@ static int32_t gpio_bool_to_int32(bool _GPIO4, bool _GPIO5){
 
 // A function to set the GPIO of the max77958 taking as input two bool values setting GPIO4 and GPIO5
 static int32_t gpio_set(int32_t gpio_val){
+    opcode_trace_mark_func_entry("gpio_set", gpio_val);
     memset(send_buf, 0, sizeof send_buf);
     send_buf[0] = OPCODE_WRITE;
     send_buf[1] = OPCODE_SET_GPIO; 
@@ -1266,6 +1447,7 @@ static int32_t gpio_set(int32_t gpio_val){
 
 static int32_t power_swap_request(void)
 {
+    opcode_trace_mark_func_entry("power_swap_request", 0);
     memset(send_buf, 0, sizeof send_buf);
     send_buf[0] = OPCODE_WRITE;
     send_buf[1] = OPCODE_SWAP_REQ;
@@ -1277,6 +1459,7 @@ static int32_t power_swap_request(void)
 
 static int32_t swap_response_write(void)
 {
+    opcode_trace_mark_func_entry("swap_response_write", 0);
     memset(send_buf, 0, sizeof send_buf);
     send_buf[0] = OPCODE_WRITE;
     send_buf[1] = OPCODE_SWAP_RESP;
@@ -1289,6 +1472,7 @@ static int32_t swap_response_write(void)
 
 static int32_t data_role_swap_request(void)
 {
+    opcode_trace_mark_func_entry("data_role_swap_request", 0);
     memset(send_buf, 0, sizeof send_buf);
     send_buf[0] = OPCODE_WRITE;
     send_buf[1] = OPCODE_SWAP_REQ;
@@ -1469,6 +1653,7 @@ static void schedule_opcode_recovery_check(void)
     if (opcode_recovery_check_count >= MAX77958_OPCODE_RECOVERY_MAX_CHECKS) {
         rp2040_log("MAX77958_DIAG: opcode recovery exhausted in_flight=%u queue=%u\n",
                     opcode_in_flight ? 1 : 0, queue_get_level(&opcode_queue));
+        opcode_trace_log_timeout_classification();
         return;
     }
 
@@ -1490,6 +1675,10 @@ static void schedule_opcode_recovery_check(void)
 static int32_t opcode_recovery_check(int32_t unused)
 {
     (void)unused;
+    uint8_t uic_int;
+    uint8_t cc_int;
+    uint8_t pd_int;
+    uint8_t action_int;
     opcode_recovery_pending = false;
 
     if (!opcode_in_flight) {
@@ -1497,11 +1686,38 @@ static int32_t opcode_recovery_check(int32_t unused)
         return 0;
     }
 
-    if (service_pending_interrupt_snapshot("opcode recovery", true)) {
+    get_interrupt_vals();
+    uic_int = return_buf[0];
+    cc_int = return_buf[1];
+    pd_int = return_buf[2];
+    action_int = return_buf[3];
+    rp2040_log("MAX77958_DIAG: opcode recovery snapshot trace_id=%" PRIu32 " count=%u/%u INTB=%u UIC_INT=0x%02x CC_INT=0x%02x PD_INT=0x%02x ACTION_INT=0x%02x queue=%u\n",
+                opcode_trace_current_id,
+                opcode_recovery_check_count,
+                MAX77958_OPCODE_RECOVERY_MAX_CHECKS,
+                gpio_get(_gpio_interrupt),
+                uic_int,
+                cc_int,
+                pd_int,
+                action_int,
+                queue_get_level(&opcode_queue));
+
+    if (uic_int == 0 && cc_int == 0 && pd_int == 0 && action_int == 0) {
+        schedule_opcode_recovery_check();
         return 0;
     }
 
-    schedule_opcode_recovery_check();
+    if (uic_int & MAX77958_UIC_INT_AP_CMD_RES) {
+        rp2040_log("MAX77958_DIAG: opcode recovery found pending AP_CMD_RES trace_id=%" PRIu32 "\n",
+                    opcode_trace_current_id);
+    }
+
+    handle_interrupt_vals(uic_int, cc_int, pd_int);
+
+    if (opcode_in_flight) {
+        schedule_opcode_recovery_check();
+    }
+
     return 0;
 }
 
@@ -1724,6 +1940,7 @@ static void vbus_turn_off(){
 #ifdef MAX77958_FORCE_VBUS_DIAGNOSTIC
 static int32_t force_vbus_on_for_diagnostic(void)
 {
+    opcode_trace_mark_func_entry("force_vbus_on_for_diagnostic", 0);
     rp2040_log("MAX77958_DIAG: forcing GPIO4/GPIO5 high for VBUS diagnostic\n");
     return gpio_set(gpio_bool_to_int32(true, true));
 }
