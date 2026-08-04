@@ -683,14 +683,29 @@ static int opcode_write(uint8_t *buf){
                 opcode_trace_cmd2,
                 opcode_trace_cmd3,
                 gpio_get(_gpio_interrupt));
+    rp2040_log("MAX77958_DIAG: opcode trace id=%" PRIu32 " opcode_write data burst start len=%u INTB=%u\n",
+                opcode_trace_current_id,
+                (unsigned)sizeof(send_buf),
+                gpio_get(_gpio_interrupt));
     i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, buf, sizeof(send_buf), false);
+    rp2040_log("MAX77958_DIAG: opcode trace id=%" PRIu32 " opcode_write data burst done INTB=%u\n",
+                opcode_trace_current_id,
+                gpio_get(_gpio_interrupt));
     //rp2040_log("opcode_write: 0x%02x 0x%02x 0x%02x 0x%02x\n", buf[0], buf[1], buf[2], buf[3]);
 
     // For whatever reason, this is necessary for the interrupt to fire. Even though I already write 0x00 to it in the line above.
     memset(send_buf, 0, sizeof &send_buf);
     send_buf[0] = 0x41;
     send_buf[1] = 0x00;
+    rp2040_log("MAX77958_DIAG: opcode trace id=%" PRIu32 " opcode_write latch start bytes=0x%02x/0x%02x INTB=%u\n",
+                opcode_trace_current_id,
+                send_buf[0],
+                send_buf[1],
+                gpio_get(_gpio_interrupt));
     i2c_write_error_handling(i2c0, MAX77958_SLAVE_P1, send_buf, 2, false);
+    rp2040_log("MAX77958_DIAG: opcode trace id=%" PRIu32 " opcode_write latch done INTB=%u\n",
+                opcode_trace_current_id,
+                gpio_get(_gpio_interrupt));
     opcode_trace_write_done = true;
     rp2040_log("MAX77958_DIAG: opcode trace id=%" PRIu32 " opcode_write done func=%s INTB=%u\n",
                 opcode_trace_current_id,
