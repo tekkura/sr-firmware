@@ -84,6 +84,7 @@ static bool test_max77958_started = false;
 static bool test_max77958_completed = false;
 static volatile uint32_t max77958_irq_count = 0;
 static volatile uint32_t max77958_irq_queue_full_count = 0;
+static volatile uint32_t max77958_irq_test_queue_full_count = 0;
 static volatile uint32_t opcode_recovery_queue_full_count = 0;
 static volatile uint32_t delayed_role_recheck_queue_full_count = 0;
 
@@ -394,7 +395,10 @@ void max77958_on_interrupt(uint gpio, uint32_t event_mask){
             assert(false);
         }
         if (test_max77958_started){
-            call_queue_try_add(&max77958_test_response, 1);
+            bool test_queued = call_queue_try_add_nonblocking(&max77958_test_response, 1);
+            if (!test_queued) {
+                max77958_irq_test_queue_full_count++;
+            }
         }
     }
 }
@@ -574,7 +578,7 @@ static int32_t parse_interrupt_vals(){
     read_interrupt_vals(&UIC_INT, &CC_INT, &PD_INT, &ACTION_INT);
     // don't really need these, but makes it easier to understand what each entry to the return_buf represents
 
-    rp2040_log("MAX77958_DIAG: parse_interrupt_vals trace_id=%" PRIu32 " INTB=%u UIC_INT=0x%02x CC_INT=0x%02x PD_INT=0x%02x ACTION_INT=0x%02x queue=%u irq_count=%" PRIu32 " irq_queue_full=%" PRIu32 "\n",
+    rp2040_log("MAX77958_DIAG: parse_interrupt_vals trace_id=%" PRIu32 " INTB=%u UIC_INT=0x%02x CC_INT=0x%02x PD_INT=0x%02x ACTION_INT=0x%02x queue=%u irq_count=%" PRIu32 " irq_queue_full=%" PRIu32 " irq_test_queue_full=%" PRIu32 "\n",
                 opcode_trace_current_id,
                 gpio_get(_gpio_interrupt),
                 UIC_INT,
@@ -583,7 +587,8 @@ static int32_t parse_interrupt_vals(){
                 ACTION_INT,
                 queue_get_level(&opcode_queue),
                 max77958_irq_count,
-                max77958_irq_queue_full_count);
+                max77958_irq_queue_full_count,
+                max77958_irq_test_queue_full_count);
 
     return handle_interrupt_vals(UIC_INT, CC_INT, PD_INT);
 }
