@@ -748,7 +748,7 @@ static bool service_pending_interrupt_snapshot(const char *context, bool log_sna
     uint8_t action_int = return_buf[3];
 
     if (log_snapshot) {
-        rp2040_log("MAX77958_DIAG: %s interrupt snapshot INTB=%u UIC_INT=0x%02x CC_INT=0x%02x PD_INT=0x%02x ACTION_INT=0x%02x opcode_queue=%u\n",
+        rp2040_log("MAX77958_DIAG: %s interrupt drain INTB=%u UIC_INT=0x%02x CC_INT=0x%02x PD_INT=0x%02x ACTION_INT=0x%02x opcode_queue=%u\n",
                    context, gpio_get(_gpio_interrupt), uic_int, cc_int, pd_int, action_int,
                    queue_get_level(&opcode_queue));
     }
@@ -785,16 +785,16 @@ static bool wait_for_opcode_response(const char *context, uint32_t timeout_ms)
         return true;
     }
 
-    rp2040_log("MAX77958_DIAG: %s opcode wait timed out after %" PRIu32 "ms; checking pending interrupts directly\n",
+    rp2040_log("MAX77958_DIAG: %s opcode wait timed out after %" PRIu32 "ms; draining pending interrupts directly\n",
                context, waited_ms);
     service_pending_interrupt_snapshot(context, true);
 
     if (opcodes_finished) {
-        rp2040_log("MAX77958_DIAG: %s opcode wait recovered from pending interrupt snapshot\n", context);
+        rp2040_log("MAX77958_DIAG: %s opcode wait recovered from pending interrupt drain\n", context);
         return true;
     }
 
-    rp2040_log("MAX77958_DIAG: %s opcode wait failed after pending interrupt snapshot\n", context);
+    rp2040_log("MAX77958_DIAG: %s opcode wait failed after pending interrupt drain\n", context);
     return false;
 }
 
@@ -1734,7 +1734,7 @@ static int32_t opcode_recovery_check(int32_t unused)
     cc_int = return_buf[1];
     pd_int = return_buf[2];
     action_int = return_buf[3];
-    rp2040_log("MAX77958_DIAG: opcode recovery snapshot trace_id=%" PRIu32 " count=%u/%u INTB=%u UIC_INT=0x%02x CC_INT=0x%02x PD_INT=0x%02x ACTION_INT=0x%02x queue=%u\n",
+    rp2040_log("MAX77958_DIAG: opcode recovery drain trace_id=%" PRIu32 " count=%u/%u INTB=%u UIC_INT=0x%02x CC_INT=0x%02x PD_INT=0x%02x ACTION_INT=0x%02x queue=%u\n",
                 opcode_trace_current_id,
                 opcode_recovery_check_count,
                 MAX77958_OPCODE_RECOVERY_MAX_CHECKS,
