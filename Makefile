@@ -10,6 +10,7 @@ DRV8830_SCOPE_TEST_CONTROL ?= 0x7A
 DRV8830_SCOPE_TEST_DWELL_MS ?= 750
 DRV8830_SCOPE_TEST_OFF_MS ?= 250
 DRV8830_SCOPE_TEST_REPEAT ?= 10
+BQ27742_TEMP_TEST ?= 0
 
 #  MILESTONE 1: BOARD SELECTION & VALIDATION 
 BOARD ?= customPCB
@@ -32,6 +33,9 @@ DRV8830_SCOPE_FLAGS = \
 	-DDRV8830_SCOPE_TEST_DWELL_MS=$(DRV8830_SCOPE_TEST_DWELL_MS) \
 	-DDRV8830_SCOPE_TEST_OFF_MS=$(DRV8830_SCOPE_TEST_OFF_MS) \
 	-DDRV8830_SCOPE_TEST_REPEAT=$(DRV8830_SCOPE_TEST_REPEAT)
+
+BQ27742_TEMP_FLAGS = \
+	-DBQ27742_TEMP_TEST=$(BQ27742_TEMP_TEST)
 
 # Variable for the RTT Test to access the serial port
 DOCKER_USB_DEVICE ?= /dev/ttyACM0
@@ -75,6 +79,7 @@ help:
 	@echo "  make docker      - Build or rebuild the Docker image (must be in project root)"
 	@echo "  make shell       - Start an interactive shell in the Docker container"
 	@echo "  make benchmark   - Build and run host benchmark (in Docker)"
+	@echo "  make bq27742-temp-test-firmware - Build BQ27742 temperature diagnostic firmware"
 	@echo "  make test TEST=rtt BOARD=[pico|customPCB] - Run full RTT benchmark flow"
 	@echo ""
 	@echo "Assumptions:"
@@ -87,13 +92,18 @@ help:
 	@echo "  ARCH=amd64|arm64        - Specify architecture for all make targets (default: amd64)"
 	@echo "  LOGGER=USB|UART         - Specify logger interface (default: USB)"
 	@echo "  DRV8830_SCOPE_TEST=0|1 - Enable DRV8830 back/forth scope test (default: 0)"
+	@echo "  BQ27742_TEMP_TEST=0|1 - Enable BQ27742 temperature diagnostic logs (default: 0)"
 	@echo "  Example: make flash DOCKER_USB_DEVICE=/dev/ttyACM0"
 
 # Build firmware
 .PHONY: firmware
 firmware:
 	@echo "Building firmware in Docker with $(JOBS) jobs..."
-	$(DOCKER_RUN) bash -c "rm -rf build && mkdir build && cd build && cmake .. -DLOGGER=$(LOGGER) $(BOARD_FLAGS) $(DRV8830_SCOPE_FLAGS) && make -j$(JOBS)"
+	$(DOCKER_RUN) bash -c "rm -rf build && mkdir build && cd build && cmake .. -DLOGGER=$(LOGGER) $(BOARD_FLAGS) $(DRV8830_SCOPE_FLAGS) $(BQ27742_TEMP_FLAGS) && make -j$(JOBS)"
+
+.PHONY: bq27742-temp-test-firmware
+bq27742-temp-test-firmware:
+	$(MAKE) firmware BQ27742_TEMP_TEST=1 LOGGER=UART
 
 # Name for the persistent debug container
 DEBUG_CONTAINER := smartphone-robot-debug
