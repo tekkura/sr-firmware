@@ -54,5 +54,5 @@ void STWLC38_get_ept_reasons(){
     send_buf[1] = 0x27;
     i2c_write_error_handling(i2c0, STWLC38_ADDR, send_buf, 2, true);
     i2c_read_error_handling(i2c0, STWLC38_ADDR, return_buf, 3, false);
-    rp2040_log("STWLC38 EPT Reason: 0x0127: 0x%02x, 0x0128: 0x%02x, 0x0129: 0x%02x", return_buf[0], return_buf[1], return_buf[2]);
+    rp2040_log_d("STWLC38 EPT Reason: 0x0127: 0x%02x, 0x0128: 0x%02x, 0x0129: 0x%02x", return_buf[0], return_buf[1], return_buf[2]);
 }

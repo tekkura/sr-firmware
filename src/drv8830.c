@@ -76,7 +76,7 @@ int32_t drv8830_fault_handler(int32_t gpio){
     }
 
     if (addr == 0){
-	rp2040_log("Error: invalid motor fault\n");
+	rp2040_log_w("Error: invalid motor fault\n");
 	return -1;
     }else{
         i2c_write_error_handling(i2c, addr, &reg, 1, true);
@@ -85,7 +85,7 @@ int32_t drv8830_fault_handler(int32_t gpio){
         bool nonfault_status_irq = !active_fault;
 #ifdef DRV8830_SCOPE_TEST
         uint32_t now_ms = to_ms_since_boot(get_absolute_time());
-        rp2040_log(
+        rp2040_log_d(
             "DRV8830_SCOPE_TEST fault context t_ms=%" PRIu32 " motor=%s active_fault=%d nonfault_status_irq=%d\n",
             now_ms,
             motor,
@@ -102,21 +102,21 @@ int32_t drv8830_fault_handler(int32_t gpio){
 #endif
             return 0;
         }
-        rp2040_log("%s motor fault\n", motor);
+        rp2040_log_w("%s motor fault\n", motor);
 #ifdef DRV8830_SCOPE_TEST
         i2c_write_error_handling(i2c, addr, clear_buf, 2, false);
         i2c_write_error_handling(i2c, addr, &reg, 1, true);
         i2c_read_error_handling(i2c, addr, &fault_values_after_clear, 1, false);
         drv8830_log_fault_bits("post_clear", motor, fault_values_after_clear);
 #else
-        rp2040_log("Fault values for Motor %s: 0x%x\n", motor, fault_values);
+        rp2040_log_w("Fault values for Motor %s: 0x%x\n", motor, fault_values);
 #endif
 	return 0;
     }
 }
 
 void drv8830_init(uint gpio_fault1, uint gpio_fault2) {
-    rp2040_log("DRV8830 init\n");
+    rp2040_log_i("DRV8830 init\n");
     _gpio_fault1 = gpio_fault1;
     _gpio_fault2 = gpio_fault2;
     gpio_init(gpio_fault1);
@@ -133,7 +133,7 @@ void drv8830_init(uint gpio_fault1, uint gpio_fault2) {
 
     set_voltage(MOTOR_LEFT, 0);
     set_voltage(MOTOR_RIGHT, 0);
-    rp2040_log("DRV8830 init complete\n");
+    rp2040_log_i("DRV8830 init complete\n");
 }
 
 /*
@@ -222,36 +222,36 @@ static void drv8830_clear_faults(){
         i2c_read_error_handling(i2c, addr[i], &fault_value, 1, false);
 	// If the first bit is not 0, then the fault has not been cleared.
         if ((fault_value & 1) != 0){
-            rp2040_log("ERROR: Motor %d cannot clear faults. Exiting.\n", i);
+            rp2040_log_e("ERROR: Motor %d cannot clear faults. Exiting.\n", i);
             assert(false);
         }
     }
 }
 
 void test_drv8830_get_faults(){
-    rp2040_log("test_drv8830_get_faults starting...\n");
+    rp2040_log_i("test_drv8830_get_faults starting...\n");
     // This already does what a test would otherwise do. 
     drv8830_clear_faults();
-    rp2040_log("test_drv8830_get_faults: PASSED.\n");
+    rp2040_log_i("test_drv8830_get_faults: PASSED.\n");
 }
 
 void test_drv8830_interrupt(){
-    rp2040_log("test_drv8830_interrupt starting...\n");
+    rp2040_log_i("test_drv8830_interrupt starting...\n");
     test_drv8830_started = true;
-    rp2040_log("test_drv8830_interrupt: prior to driving low GPIO%d. Current Value:%d\n", _gpio_fault1, gpio_get(_gpio_fault1));
+    rp2040_log_i("test_drv8830_interrupt: prior to driving low GPIO%d. Current Value:%d\n", _gpio_fault1, gpio_get(_gpio_fault1));
     gpio_set_dir(_gpio_fault1, GPIO_OUT);
     if (gpio_get(_gpio_fault1) != 0){
-	rp2040_log("ERROR: test_drv8830_interrupt: GPIO%d was not driven low. Current Value:%d\n", _gpio_fault1, gpio_get(_gpio_fault1));
+	rp2040_log_e("ERROR: test_drv8830_interrupt: GPIO%d was not driven low. Current Value:%d\n", _gpio_fault1, gpio_get(_gpio_fault1));
 	assert(false);
     }
-    rp2040_log("test_drv8830_interrupt: after driving low GPIO%d. Current Value:%d\n", _gpio_fault1, gpio_get(_gpio_fault1));
+    rp2040_log_i("test_drv8830_interrupt: after driving low GPIO%d. Current Value:%d\n", _gpio_fault1, gpio_get(_gpio_fault1));
     uint32_t i = 0;
     while (!test_drv8830_completed){
         sleep_ms(10);
 	tight_loop_contents();
 	i++;
 	if (i > 1000){
-	    rp2040_log("ERROR: test_drv8830_interrupt timed out\n");
+	    rp2040_log_e("ERROR: test_drv8830_interrupt timed out\n");
 	    assert(false);
 	}
     }
@@ -259,7 +259,7 @@ void test_drv8830_interrupt(){
     gpio_pull_up(_gpio_fault1);
     test_drv8830_started = false;
     test_drv8830_completed = false;
-    rp2040_log("test_drv8830_interrupt: Encoder 1 PASSED after %" PRIu32 " milliseconds.\n", i*10);
+    rp2040_log_i("test_drv8830_interrupt: Encoder 1 PASSED after %" PRIu32 " milliseconds.\n", i*10);
     test_drv8830_started = true;
     gpio_set_dir(_gpio_fault2, GPIO_OUT);
     while (!test_drv8830_completed){
@@ -267,14 +267,14 @@ void test_drv8830_interrupt(){
 	tight_loop_contents();
 	i++;
 	if (i > 1000){
-	    rp2040_log("ERROR: test_drv8830_interrupt timed out\n");
+	    rp2040_log_e("ERROR: test_drv8830_interrupt timed out\n");
 	    assert(false);
 	}
     }
     gpio_set_dir(_gpio_fault2, GPIO_IN);
     gpio_pull_up(_gpio_fault2);
     test_drv8830_started = false;
-    rp2040_log("test_drv8830_interrupt: Encoder 2 PASSED after %" PRIu32 " milliseconds.\n", i*10);
+    rp2040_log_i("test_drv8830_interrupt: Encoder 2 PASSED after %" PRIu32 " milliseconds.\n", i*10);
 }
 
 static int32_t drv8830_test_response(){
@@ -288,7 +288,7 @@ void drv8830_scope_test_run(){
     const uint8_t reverse_control = ((uint8_t)DRV8830_SCOPE_TEST_CONTROL & 0xFC) | (1 << DRV8830_IN1_BIT);
     const uint8_t off_control = 0;
 
-    rp2040_log("DRV8830_SCOPE_TEST START repeat=%d control=0x%02x forward=0x%02x reverse=0x%02x dwell_ms=%d off_ms=%d\n",
+    rp2040_log_i("DRV8830_SCOPE_TEST START repeat=%d control=0x%02x forward=0x%02x reverse=0x%02x dwell_ms=%d off_ms=%d\n",
         DRV8830_SCOPE_TEST_REPEAT,
         (uint8_t)DRV8830_SCOPE_TEST_CONTROL,
         forward_control,
@@ -301,26 +301,26 @@ void drv8830_scope_test_run(){
     sleep_ms(DRV8830_SCOPE_TEST_OFF_MS);
 
     for (uint32_t i = 0; i < DRV8830_SCOPE_TEST_REPEAT; i++){
-        rp2040_log("DRV8830_SCOPE_TEST phase=%" PRIu32 " direction=forward t_ms=%" PRIu32 "\n", i + 1, to_ms_since_boot(get_absolute_time()));
+        rp2040_log_i("DRV8830_SCOPE_TEST phase=%" PRIu32 " direction=forward t_ms=%" PRIu32 "\n", i + 1, to_ms_since_boot(get_absolute_time()));
         drv8830_scope_queue_controls(forward_control, forward_control);
         sleep_ms(DRV8830_SCOPE_TEST_DWELL_MS);
 
-        rp2040_log("DRV8830_SCOPE_TEST phase=%" PRIu32 " direction=off_after_forward t_ms=%" PRIu32 "\n", i + 1, to_ms_since_boot(get_absolute_time()));
+        rp2040_log_i("DRV8830_SCOPE_TEST phase=%" PRIu32 " direction=off_after_forward t_ms=%" PRIu32 "\n", i + 1, to_ms_since_boot(get_absolute_time()));
         drv8830_scope_queue_controls(off_control, off_control);
         sleep_ms(DRV8830_SCOPE_TEST_OFF_MS);
 
-        rp2040_log("DRV8830_SCOPE_TEST phase=%" PRIu32 " direction=reverse t_ms=%" PRIu32 "\n", i + 1, to_ms_since_boot(get_absolute_time()));
+        rp2040_log_i("DRV8830_SCOPE_TEST phase=%" PRIu32 " direction=reverse t_ms=%" PRIu32 "\n", i + 1, to_ms_since_boot(get_absolute_time()));
         drv8830_scope_queue_controls(reverse_control, reverse_control);
         sleep_ms(DRV8830_SCOPE_TEST_DWELL_MS);
 
-        rp2040_log("DRV8830_SCOPE_TEST phase=%" PRIu32 " direction=off_after_reverse t_ms=%" PRIu32 "\n", i + 1, to_ms_since_boot(get_absolute_time()));
+        rp2040_log_i("DRV8830_SCOPE_TEST phase=%" PRIu32 " direction=off_after_reverse t_ms=%" PRIu32 "\n", i + 1, to_ms_since_boot(get_absolute_time()));
         drv8830_scope_queue_controls(off_control, off_control);
         sleep_ms(DRV8830_SCOPE_TEST_OFF_MS);
     }
 
     drv8830_scope_queue_controls(off_control, off_control);
     sleep_ms(50);
-    rp2040_log("DRV8830_SCOPE_TEST END motors=off t_ms=%" PRIu32 "\n", to_ms_since_boot(get_absolute_time()));
+    rp2040_log_i("DRV8830_SCOPE_TEST END motors=off t_ms=%" PRIu32 "\n", to_ms_since_boot(get_absolute_time()));
 #endif
 }
 
@@ -340,7 +340,7 @@ static int32_t drv8830_scope_set_controls(int32_t packed_controls){
 }
 
 static void drv8830_log_fault_bits(const char *prefix, const char *motor, uint8_t faults){
-    rp2040_log(
+    rp2040_log_i(
         "DRV8830_SCOPE_TEST fault_%s t_ms=%" PRIu32 " motor=%s raw=0x%02x ILIMIT=%d OTS=%d UVLO=%d OCP=%d FAULT=%d\n",
         prefix,
         to_ms_since_boot(get_absolute_time()),

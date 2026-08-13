@@ -16,7 +16,6 @@
 #endif
 #define LOG_UART_TX_PIN PICO_DEFAULT_UART_TX_PIN
 #define LOG_UART_RX_PIN PICO_DEFAULT_UART_RX_PIN
-
 static CircularBufferLog log_buffer;
 auto_init_mutex(rp2040_log_buffer_mutex);
 
@@ -42,7 +41,9 @@ void rp2040_log_release_lock() {
 }
 
 
-void rp2040_log(const char* format, ...) {
+void rp2040_log(int level, const char* format, ...) {
+    if (level < LOG_LEVEL) return;
+
     rp2040_log_acquire_lock(); // Acquire the lock
     va_list args;
 
@@ -61,7 +62,7 @@ void rp2040_log(const char* format, ...) {
 
     va_start(args, format);
     // Calculate the number of characters required
-    int len = vsnprintf(NULL, 0, format, args) + 1; //include the /n 
+    int len = vsnprintf(NULL, 0, format, args) + 1; //include the /n
     va_end(args);
 
     // truncate the message if it is too long else expect chaos when overwriting unknown areas of memory
@@ -90,7 +91,9 @@ uint16_t rp2040_get_byte_count() {
    // sum up the values witin log_array_line_size
    uint16_t byte_count = 0; 
    for (int i = 0; i < LOG_BUFFER_LINE_COUNT; i++) {
-	   byte_count += log_buffer.log_array_line_size[i] - 1;
+	   if (log_buffer.log_array_line_size[i] > 0) {
+	       byte_count += log_buffer.log_array_line_size[i] - 1;
+	   }
    }
    return byte_count;
 }
@@ -103,4 +106,3 @@ void rp2040_log_flush(){
 	log_buffer.head = (log_buffer.head + 1) % LOG_BUFFER_LINE_COUNT; // Update head correctly
     }
 }
-
