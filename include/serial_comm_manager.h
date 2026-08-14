@@ -19,9 +19,9 @@
 #define ANDROID_BUFFER_LENGTH_IN _u(2)
 #define ANDROID_BUFFER_LENGTH_OUT _u(61) // +3 for start, command, and end marks for a 64 byte packet
 
-#define WRITE_MAX_RETRIES 15
-#define WRITE_RETRY_DELAY 5
-#define WRITE_FLUSH_TRIGGER 5
+#define WRITE_TIMEOUT_US 5000
+#define WRITE_RETRY_DELAY_US 25
+#define WRITE_FLUSH_INTERVAL_US 250
 
 #pragma pack(1) // Set packing alignment to 1 byte
 typedef struct

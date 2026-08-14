@@ -24,55 +24,52 @@ static RP2040_STATE rp2040_state_;
  * Returns true if all bytes were written, false on timeout.
  */
 static bool cdc_write_optimized(const void* buf, uint32_t len, bool flush) {
-    if (!tud_cdc_n_connected(0)) return false;
-
     const uint8_t* p = (const uint8_t*) buf;
     uint32_t remaining = len;
-    uint32_t retries = 0;
+    absolute_time_t deadline = make_timeout_time_us(WRITE_TIMEOUT_US);
+    absolute_time_t next_flush = make_timeout_time_us(WRITE_FLUSH_INTERVAL_US);
 
-    // DETERMINISTIC PATH: If the whole packet fits in the FIFO, write it all at once.
-    // This avoids the retry/sleep logic for standard state packets.
-    uint32_t available = tud_cdc_n_write_available(0);
-    if (available >= len) {
-        tud_cdc_n_write(0, buf, len);
-        if (flush) tud_cdc_n_write_flush(0);
-        return true;
-    }
+    while (remaining > 0) {
+#if CFG_TUSB_MCU == OPT_MCU_RP2040
+        tud_task();
+#endif
 
-    // RETRY PATH: Only used if FIFO is full (e.g. during heavy logging)
-    while (remaining > 0 && tud_cdc_n_connected(0)) {
-        uint32_t written = tud_cdc_n_write(0, p, remaining);
+        uint32_t written = 0;
+        if (tud_cdc_n_connected(0)) {
+            written = tud_cdc_n_write(0, p, remaining);
+        }
+
         if (written > 0) {
             p += written;
             remaining -= written;
-            retries = 0;
-        } else {
-            if (++retries > WRITE_MAX_RETRIES) {
-                return false;
-            }
-
-#if CFG_TUSB_MCU == OPT_MCU_RP2040
-            tud_task();
-#endif
-            if (retries == WRITE_FLUSH_TRIGGER) {
-                // MECHANICAL FLUSH: If we are stuck, force a packet out to make room.
-                // We only do this after a couple of retries to allow for natural bus drainage.
-                tud_cdc_n_write_flush(0);
-            }
-
-            // Tight spin before sleeping to keep jitter low
-            if (retries > 1)
-                sleep_us(WRITE_RETRY_DELAY);
+            continue;
         }
+
+        if (flush && absolute_time_diff_us(get_absolute_time(), next_flush) <= 0) {
+            tud_cdc_n_write_flush(0);
+            next_flush = make_timeout_time_us(WRITE_FLUSH_INTERVAL_US);
+        }
+
+        if (absolute_time_diff_us(get_absolute_time(), deadline) <= 0) {
+            return false;
+        }
+
+        sleep_us(WRITE_RETRY_DELAY_US);
     }
 
     if (flush) tud_cdc_n_write_flush(0);
 
-    return remaining == 0;
+    return true;
 }
 
 #define cdc_write(buf, len) cdc_write_optimized(buf, len, true)
 #define cdc_write_no_flush(buf, len) cdc_write_optimized(buf, len, false)
+
+static void cdc_write_response(const void* buf, uint32_t len) {
+    if (!cdc_write(buf, len)) {
+        rp2040_log("CDC response write timed out.\n");
+    }
+}
 
 void serial_comm_manager_init(RP2040_STATE* rp2040_state){
     rp2040_state_ = *rp2040_state;
@@ -106,7 +103,7 @@ static void reset_packet_and_send_nack(int8_t *start_idx, int8_t *end_idx, uint1
     outgoing_packet_to_android.telemetry.t4_timestamp_us = 0;
     outgoing_packet_to_android.telemetry.t5_timestamp_us = 0;
 #endif
-    cdc_write(&outgoing_packet_to_android, sizeof(outgoing_packet_to_android));
+    cdc_write_response(&outgoing_packet_to_android, sizeof(outgoing_packet_to_android));
 }
 
 // reads data from the UART and stores it in buffer. If no data is available, returns immediately.
@@ -228,7 +225,7 @@ void handle_packet(IncomingPacketFromAndroid *packet){
 #endif
 
             // Use direct CDC write for the whole packet
-            cdc_write(&outgoing_packet_to_android, sizeof(outgoing_packet_to_android));
+            cdc_write_response(&outgoing_packet_to_android, sizeof(outgoing_packet_to_android));
             break;
         case GET_STATE:
             outgoing_packet_to_android.packet_type = packet->packet_type;
@@ -242,7 +239,7 @@ void handle_packet(IncomingPacketFromAndroid *packet){
 #endif
 
             // Use direct CDC write for the whole packet
-            cdc_write(&outgoing_packet_to_android, sizeof(outgoing_packet_to_android));
+            cdc_write_response(&outgoing_packet_to_android, sizeof(outgoing_packet_to_android));
             break;
         case GET_VERSION:
             outgoing_version_packet_to_android.packet_type = packet->packet_type;
@@ -250,14 +247,14 @@ void handle_packet(IncomingPacketFromAndroid *packet){
             outgoing_version_packet_to_android.data.version_minor = FW_VERSION_MINOR;
             outgoing_version_packet_to_android.data.version_patch = FW_VERSION_PATCH;
 
-            cdc_write_optimized(&outgoing_version_packet_to_android, sizeof(outgoing_version_packet_to_android), true);
+            cdc_write_response(&outgoing_version_packet_to_android, sizeof(outgoing_version_packet_to_android));
             break;
         case RESET_STATE:
             // TODO
             break;
         default:
             outgoing_packet_to_android.packet_type = NACK;
-            cdc_write(&outgoing_packet_to_android, sizeof(outgoing_packet_to_android));
+            cdc_write_response(&outgoing_packet_to_android, sizeof(outgoing_packet_to_android));
             break;
     }
 }
