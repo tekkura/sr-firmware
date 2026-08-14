@@ -84,7 +84,7 @@ void send_log_packet() {
  * Reads a single byte from UART with timeout.
  */
 static inline int read_byte() {
-    return getchar_timeout_us(100); // 100us timeout
+    return getchar_timeout_us(FRAME_BYTE_TIMEOUT_US);
 }
 
 /**

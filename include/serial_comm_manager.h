@@ -20,6 +20,7 @@
 #define ACK 0xFD
 
 #define MAX_PAYLOAD_SIZE 1024
+#define FRAME_BYTE_TIMEOUT_US 5000
 
 #pragma pack(1)
 // Lightweight header for zero-copy streaming
