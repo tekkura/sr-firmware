@@ -53,3 +53,20 @@ After seeing those results, I have noticed that the AI increased the timeout win
 Interestingly, the average time skyrocketed after the revert. I think that the cause is that usb serial can't reliably pass bytes this quickly and this might be my testing setup issue, but this is something worth looking into.
 
 As for the length prefix + CRC framing, this solution is slightly faster than TinyFrame and, in comparison with legacy, it allows for the variable length commands. It is still a major latency increase though, not sure that the trade-off is worth it
+
+## Rebased CRC: Android hardware validation
+
+2026-09-05 04:44:10 UTC, Pixel 3a / Android 12 + RP2040 over USB serial;
+100 warm-up and 1000 measured iterations. This Android run uses a different
+benchmark/setup from the historical PC measurements above.
+
+- Android: `tekkura/CommunicationFraming+crc-length-prefix` at
+  `c01c50bfe74894e862817aed8833a43c7e5705c6` (embedded in the report).
+- Firmware: `tekkura/feature/milestone-3-crc-framing` at
+  `9bfeef30fbd91745275104a4a887046650797cdd` (operator run history and branch
+  ancestry; the device report did not record the firmware hash).
+- Responses: **1000/1000**; RTT mean **22.705 ms**, p95 **26.253 ms**,
+  min **18.607 ms**, max **35.097 ms**. Gradle failed the mean RTT <20 ms assertion.
+
+These are the tested rebased revisions, before Android `720a67dc` (RESET_STATE
+ACK alignment) and firmware `8d3e3c9` (protocol documentation only).
