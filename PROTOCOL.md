@@ -1,4 +1,4 @@
-# Communication Protocol Contract (v1.0.0)
+# Communication Protocol Contract
 
 This document defines the communication contract between the RP2040 firmware and the Android Host application using the custom Length-Prefix + CRC framing.
 
@@ -25,8 +25,9 @@ The protocol uses a lightweight custom framing structure designed for high-speed
 |:-------|:------------------|:-------------------------------------------------------------------|:-----------------|
 | `0x00` | `GET_LOG`         | Requests circular buffer logs                                      | `Raw String`     |
 | `0x01` | `SET_MOTOR_LEVEL` | Sets [Left, Right] PWM                                             | `RP2040_STATE`   |
-| `0x03` | `GET_STATE`       | Requests current sensor/motor state                                | `RP2040_STATE`   |
 | `0x02` | `RESET_STATE`     | Currently does nothing                                             | `ACK (0xFD)`     |
+| `0x03` | `GET_STATE`       | Requests current sensor/motor state                                | `RP2040_STATE`   |
+| `0x06` | `GET_VERSION`     | Requests firmware protocol version                                 | Three bytes: major, minor, patch |
 | `0xFD` | `ACK`             | Only supposed to be used as a response                             | None             |
 | `0xFC` | `NACK`            | Integrity error (CRC mismatch, invalid command ID or payload size) | None             |
 
@@ -43,6 +44,15 @@ All structures are **Packed (1-byte alignment)** and use **Little-Endian** byte 
 | 4      | `EncoderCounts.left`  | `uint32_t` | Cumulative encoder ticks    |
 | 8      | `EncoderCounts.right` | `uint32_t` | Cumulative encoder ticks    |
 | ...    | ...                   | ...        | See `serial_comm_manager.h` |
+
+### `GET_VERSION` response
+The response payload is exactly three bytes: major, minor, and patch. The
+current values are defined in `include/version.h`.
+
+### `RESET_STATE`
+`RESET_STATE` is reserved for a future state reset workflow. Current firmware
+does not reset any robot state for this command and responds with an empty
+`ACK`.
 
 ## 4. Android-Side Implementation Guide
 *   **Framing Logic**: The Android library must follow the structure in Section 1, specifically calculating the CRC over the length field, command ID, and data payload.
