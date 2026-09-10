@@ -1,7 +1,7 @@
 /**
  * EdgeForge Labs - Milestone 3: Host-Side Test Harness
  * USB CDC RTT Benchmark Tool
- * Protocol: Length-Prefix + CRC16 (Start=0x01, Cmd=0x01)
+ * Protocol: Length-Prefix + CRC16 (Start=0xFE, Cmd=0x01)
  */
 
 #include <iostream>

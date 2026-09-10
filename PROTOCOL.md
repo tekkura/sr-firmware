@@ -18,7 +18,7 @@ The protocol uses a lightweight custom framing structure designed for high-speed
 *   **CRC Polynomial**: `0x1021` (x^16 + x^12 + x^5 + 1)
 *   **Initial CRC Value**: `0xFFFF`
 *   **Endianness**: All multi-byte fields (`LENGTH`, `CRC16`, and internal struct fields) use **Little-Endian** byte order.
-*   **Log Line Count**: Set to 500 to avoid length and crc16 overflow
+*   **Log Capacity**: Up to 1028 lines, each containing at most 127 payload bytes. Retained log payload is limited to 65534 bytes, reserving one byte for the command in the 16-bit frame length. Oldest lines are discarded when either limit is reached.
 
 ## 2. Command Types (Message IDs)
 | Hex ID | Name              | Description                                                        | Response Payload |
@@ -30,6 +30,10 @@ The protocol uses a lightweight custom framing structure designed for high-speed
 | `0x06` | `GET_VERSION`     | Requests firmware protocol version                                 | Three bytes: major, minor, patch |
 | `0xFD` | `ACK`             | Only supposed to be used as a response                             | None             |
 | `0xFC` | `NACK`            | Integrity error (CRC mismatch, invalid command ID or payload size) | None             |
+
+Request payloads must be exactly two bytes for `SET_MOTOR_LEVEL` and empty
+for `GET_LOG`, `GET_STATE`, `GET_VERSION`, and `RESET_STATE`. An incorrect
+payload size returns `NACK` without executing the command.
 
 ## 3. Data Structures
 All structures are **Packed (1-byte alignment)** and use **Little-Endian** byte order for internal fields.

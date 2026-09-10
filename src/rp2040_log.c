@@ -51,7 +51,7 @@ static void rp2040_log_drop_oldest() {
 
 static void rp2040_log_make_room(uint16_t payload_size) {
     while (log_buffer.count == LOG_BUFFER_LINE_COUNT ||
-           (uint32_t)log_buffer.byte_count + payload_size > UINT16_MAX) {
+           (uint32_t)log_buffer.byte_count + payload_size > UINT16_MAX - 1u) {
         rp2040_log_drop_oldest();
     }
 }
@@ -135,7 +135,7 @@ uint16_t rp2040_get_crc(uint16_t initial_crc) {
     uint16_t crc = initial_crc;
     uint16_t current = log_buffer.head;
 
-    for (int i = 0; i < LOG_BUFFER_LINE_COUNT; i++) {
+    for (uint16_t i = 0; i < log_buffer.count; i++) {
         uint16_t size = log_buffer.log_array_line_size[current];
         if (size > 1) {
             // Calculate CRC for this specific line (excluding null terminator)

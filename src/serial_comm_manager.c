@@ -162,6 +162,14 @@ void get_block() {
 }
 
 void handle_packet(uint8_t cmd, const uint8_t *payload, uint16_t payload_len) {
+    // Validate before dispatch so malformed requests cannot change state or drain logs.
+    if ((cmd == SET_MOTOR_LEVEL && payload_len != 2) ||
+        ((cmd == GET_LOG || cmd == GET_STATE || cmd == GET_VERSION || cmd == RESET_STATE) &&
+         payload_len != 0)) {
+        send_framed_packet(NACK, NULL, 0);
+        return;
+    }
+
     switch (cmd) {
         case GET_LOG: {
             send_log_packet();

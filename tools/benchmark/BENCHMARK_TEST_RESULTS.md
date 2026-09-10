@@ -2,6 +2,20 @@ This document contains the results of the benchmark tests for measuring Round-Tr
 
 Each row represents a separate benchmark test run
 
+## Measurement scope
+
+The PC tables below are historical experiments, not measurements of the
+current firmware. Their firmware/host commit hashes were not recorded; the
+100 us run used a local timeout change. Current firmware uses
+`FRAME_BYTE_TIMEOUT_US=5000` (5 ms). The Android run at the end identifies
+the tested revisions and used that 5 ms timeout.
+
+These RTT measurements exercise only `SET_MOTOR_LEVEL`. They do not validate
+variable-length logs, malformed requests, or parser recovery. Host protocol
+regression tests are documented in `tests/protocol/README.md`; they are not
+USB latency measurements. No hardware results for the PR review fixes are
+recorded here.
+
 ## Initial measurements
 
 | Success Rate (%) | Min (ms) | Max (ms) | Avg (ms) | Jitter (ms) |

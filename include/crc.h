@@ -6,9 +6,9 @@
 
 /**
  * @brief Calculates the CRC16-CCITT checksum for a buffer.
- * 
+ *
  * Polynomial: 0x1021 (x^16 + x^12 + x^5 + 1)
- * 
+ *
  * @param data Pointer to the data buffer
  * @param length Length of the data in bytes
  * @param initial Initial value (usually 0xFFFF for first call, then previous result)
