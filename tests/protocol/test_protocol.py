@@ -102,6 +102,10 @@ void test_request(const unsigned char *bytes, size_t length) {
     output_size = 0;
     get_block();
 }
+
+void test_process_next(void) {
+    get_block();
+}
 """
 
 
@@ -143,7 +147,7 @@ class ProtocolTests(unittest.TestCase):
         cls.lib.test_log.argtypes = [ctypes.c_char_p]
         cls.lib.test_request.argtypes = [ctypes.c_char_p, ctypes.c_size_t]
         cls.lib.rp2040_get_byte_count.restype = ctypes.c_uint16
-        for name in ("test_log", "test_request", "test_reset"):
+        for name in ("test_log", "test_request", "test_process_next", "test_reset"):
             getattr(cls.lib, name).restype = None
 
     def setUp(self):
@@ -156,6 +160,10 @@ class ProtocolTests(unittest.TestCase):
 
     def request(self, command, payload=b""):
         return self.request_bytes(frame(command, payload))
+
+    def captured_output(self):
+        size = ctypes.c_size_t.in_dll(self.lib, "output_size").value
+        return bytes((ctypes.c_ubyte * size).in_dll(self.lib, "output"))
 
     def test_repeated_log_reads(self):
         for message in (b"first\n", b"second\n"):
@@ -220,6 +228,16 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(self.request_bytes(packet), frame(NACK))
         self.assertEqual(self.request(0x99), frame(NACK))
         self.assertEqual(ctypes.c_uint.in_dll(self.lib, "motor_calls").value, 0)
+
+    def test_oversized_frame_is_drained_before_next_request(self):
+        oversized_body = b"\x99\xfe" + b"x" * 1023
+        oversized = b"\xfe\x01\x04" + oversized_body + b"\x00\x00"
+
+        self.lib.test_request(oversized + frame(RESET), len(oversized) + len(frame(RESET)))
+        self.assertEqual(self.captured_output(), frame(NACK))
+
+        self.lib.test_process_next()
+        self.assertEqual(self.captured_output(), frame(NACK) + frame(ACK))
 
     def test_timeout_then_valid_request(self):
         self.assertEqual(self.request_bytes(b""), b"")

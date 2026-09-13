@@ -88,6 +88,16 @@ static inline int read_byte() {
 }
 
 /**
+ * Discards up to count bytes from the current frame.
+ * Stops when the frame remainder has been consumed or input times out.
+ */
+static void discard_bytes(uint32_t count) {
+    while (count-- > 0)
+        if (read_byte() == PICO_ERROR_TIMEOUT)
+            return;
+}
+
+/**
  * Receives a framed block from the host.
  */
 void get_block() {
@@ -112,6 +122,10 @@ void get_block() {
     uint16_t total_payload_len = (uint16_t)l1 | ((uint16_t)l2 << 8);
     if (total_payload_len == 0 || total_payload_len > MAX_PAYLOAD_SIZE) {
         send_framed_packet(NACK, NULL, 0);
+        // The length cannot be stored in rx_buffer, but it still identifies the
+        // remainder of this frame. Drain its payload and CRC so marker bytes in
+        // the rejected body cannot be mistaken for the next frame boundary.
+        discard_bytes((uint32_t)total_payload_len + 2u);
         return;
     }
 
