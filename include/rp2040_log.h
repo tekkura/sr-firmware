@@ -33,6 +33,7 @@ void rp2040_log_init();
 void rp2040_log(int level, const char *format, ...);
 void rp2040_log_flush();
 uint16_t rp2040_get_byte_count();
+uint16_t rp2040_get_crc(uint16_t initial_crc);
 void rp2040_orient_copy_buffer(char* output_array);
 void rp2040_log_acquire_lock();
 void rp2040_log_release_lock();
